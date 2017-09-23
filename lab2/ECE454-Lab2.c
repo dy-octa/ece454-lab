@@ -242,7 +242,8 @@ int main(int argc, char **argv) {
         verifiedAllFramesGrading();
 
         // Compute simple speedup statistics - round speedup to the nearest integer
-        printf("\tOptimization Speedup Ratio (nearest integer): %d\n", (int)((num_cycles_reference / num_cycles_optimized) + 0.5));
+//        printf("\tOptimization Speedup Ratio (nearest integer): %d\n", (int)((num_cycles_reference / num_cycles_optimized) + 0.5));
+        printf("\tOptimization Speedup Ratio: %.2f\n", (num_cycles_reference / num_cycles_optimized));
         printf("*******************************************************************************************************\n");
     }
 

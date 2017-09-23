@@ -14,7 +14,23 @@
  * Note2: You can assume the object will never be moved off the screen
  **********************************************************************************************************************/
 unsigned char *processMoveUp(unsigned char *buffer_frame, unsigned width, unsigned height, int offset) {
-    return processMoveUpReference(buffer_frame, width, height, offset);
+    for (int row = 0; row < (height - offset); row++) {
+	    int rowpos = row * width * 3;
+	    int drowpos = (row + offset) * width * 3;
+        for (int column = 0; column < width; column++) {
+            int position_rendered_frame = rowpos + column * 3;
+            int position_buffer_frame = drowpos + column * 3;
+            buffer_frame[position_rendered_frame] = buffer_frame[position_buffer_frame];
+            buffer_frame[position_rendered_frame + 1] = buffer_frame[position_buffer_frame + 1];
+            buffer_frame[position_rendered_frame + 2] = buffer_frame[position_buffer_frame + 2];
+        }
+    }
+
+    // fill left over pixels with white pixels
+	int position_buffer_frame = (height - offset) * width * 3;
+	int position_end_buffer_frame = height * width * 3;
+	memset(buffer_frame + position_buffer_frame, 255, position_end_buffer_frame - position_buffer_frame);
+	return buffer_frame;
 }
 
 /***********************************************************************************************************************
@@ -27,7 +43,22 @@ unsigned char *processMoveUp(unsigned char *buffer_frame, unsigned width, unsign
  * Note2: You can assume the object will never be moved off the screen
  **********************************************************************************************************************/
 unsigned char *processMoveRight(unsigned char *buffer_frame, unsigned width, unsigned height, int offset) {
-    return processMoveRightReference(buffer_frame, width, height, offset);
+	// store shifted pixels to temporary buffer
+	for (int row = 0; row < height; row++) {
+		int rowpos = row * width * 3;
+		for (int column = width - 1; column >= offset; column--) {
+			int position_rendered_frame =  rowpos + column * 3;
+			int position_buffer_frame = rowpos + (column - offset) * 3;
+			buffer_frame[position_rendered_frame] = buffer_frame[position_buffer_frame];
+			buffer_frame[position_rendered_frame + 1] = buffer_frame[position_buffer_frame + 1];
+			buffer_frame[position_rendered_frame + 2] = buffer_frame[position_buffer_frame + 2];
+		}
+	}
+
+	// fill left over pixels with white pixels
+	for (int row = 0; row < height; row++)
+		memset(buffer_frame + row * width * 3, 255, offset * 3);
+	return buffer_frame;
 }
 
 /***********************************************************************************************************************
@@ -40,7 +71,22 @@ unsigned char *processMoveRight(unsigned char *buffer_frame, unsigned width, uns
  * Note2: You can assume the object will never be moved off the screen
  **********************************************************************************************************************/
 unsigned char *processMoveDown(unsigned char *buffer_frame, unsigned width, unsigned height, int offset) {
-    return processMoveDownReference(buffer_frame, width, height, offset);
+	// store shifted pixels to temporary buffer
+	for (int row = height - 1; row >= offset; row--) {
+		int rowpos = row * width * 3;
+		int drowpos = (row - offset) * width * 3;
+		for (int column = 0; column < width; column++) {
+			int position_rendered_frame = rowpos + column * 3;
+			int position_buffer_frame = drowpos + column * 3;
+			buffer_frame[position_rendered_frame] = buffer_frame[position_buffer_frame];
+			buffer_frame[position_rendered_frame + 1] = buffer_frame[position_buffer_frame + 1];
+			buffer_frame[position_rendered_frame + 2] = buffer_frame[position_buffer_frame + 2];
+		}
+	}
+
+	// fill left over pixels with white pixels
+	memset(buffer_frame, 255, offset * width * 3);
+	return buffer_frame;
 }
 
 /***********************************************************************************************************************
@@ -53,7 +99,22 @@ unsigned char *processMoveDown(unsigned char *buffer_frame, unsigned width, unsi
  * Note2: You can assume the object will never be moved off the screen
  **********************************************************************************************************************/
 unsigned char *processMoveLeft(unsigned char *buffer_frame, unsigned width, unsigned height, int offset) {
-    return processMoveLeftReference(buffer_frame, width, height, offset);
+	// store shifted pixels to temporary buffer
+	for (int row = 0; row < height; row++) {
+		int rowpos = row * width * 3;
+		for (int column = 0; column < (width - offset); column++) {
+			int position_rendered_frame = rowpos + column * 3;
+			int position_buffer_frame = rowpos + (column + offset) * 3;
+			buffer_frame[position_rendered_frame] = buffer_frame[position_buffer_frame];
+			buffer_frame[position_rendered_frame + 1] = buffer_frame[position_buffer_frame + 1];
+			buffer_frame[position_rendered_frame + 2] = buffer_frame[position_buffer_frame + 2];
+		}
+	}
+
+	// fill left over pixels with white pixels
+	for (int row = 0; row < height; row++)
+		memset(buffer_frame + row * width * 3 + (width - offset) * 3, 255, offset * 3);
+	return buffer_frame;
 }
 
 /***********************************************************************************************************************
@@ -66,7 +127,35 @@ unsigned char *processMoveLeft(unsigned char *buffer_frame, unsigned width, unsi
  **********************************************************************************************************************/
 unsigned char *processRotateCW(unsigned char *buffer_frame, unsigned width, unsigned height,
                                int rotate_iteration) {
-    return processRotateCWReference(buffer_frame, width, height, rotate_iteration);
+	// allocate memory for temporary image buffer
+	unsigned char static *rendered_frame = NULL;
+	if (rendered_frame == NULL)
+		rendered_frame = allocateFrame(width, height);
+
+	rotate_iteration %= 4;
+	// store shifted pixels to temporary buffer
+	for (int iteration = 0; iteration < rotate_iteration; iteration++) {
+		int render_column = width - 1;
+		int render_row = 0;
+		for (int row = 0; row < width; row++) {
+			for (int column = 0; column < height; column++) {
+				int position_frame_buffer = row * width * 3 + column * 3;
+				rendered_frame[render_row * width * 3 + render_column * 3] = buffer_frame[position_frame_buffer];
+				rendered_frame[render_row * width * 3 + render_column * 3 + 1] = buffer_frame[position_frame_buffer + 1];
+				rendered_frame[render_row * width * 3 + render_column * 3 + 2] = buffer_frame[position_frame_buffer + 2];
+				render_row += 1;
+			}
+			render_row = 0;
+			render_column -= 1;
+		}
+
+	}
+
+	// copy the temporary buffer back to original frame buffer
+	buffer_frame = copyFrame(rendered_frame, buffer_frame, width, height);
+
+	// return a pointer to the updated image buffer
+	return buffer_frame;
 }
 
 /***********************************************************************************************************************
@@ -79,7 +168,7 @@ unsigned char *processRotateCW(unsigned char *buffer_frame, unsigned width, unsi
  **********************************************************************************************************************/
 unsigned char *processRotateCCW(unsigned char *buffer_frame, unsigned width, unsigned height,
                                 int rotate_iteration) {
-    return processRotateCCWReference(buffer_frame, width, height, rotate_iteration);
+	return buffer_frame = processRotateCWReference(buffer_frame, width, height, 3 * rotate_iteration);
 }
 
 /***********************************************************************************************************************
@@ -89,8 +178,22 @@ unsigned char *processRotateCCW(unsigned char *buffer_frame, unsigned width, uns
  * @param _unused - this field is unused
  * @return
  **********************************************************************************************************************/
+#define swap(a,b) (tmp=a,a=b,b=tmp)
 unsigned char *processMirrorX(unsigned char *buffer_frame, unsigned int width, unsigned int height, int _unused) {
-    return processMirrorXReference(buffer_frame, width, height, _unused);
+	char tmp;
+	// store shifted pixels to temporary buffer
+	for (int row = 0; row * 2 < height; row++) {
+		int rowpos = row * height * 3;
+		int drowpos = (height - row - 1) * height * 3;
+		for (int column = 0; column < width; column++) {
+			int position_rendered_frame = rowpos + column * 3;
+			int position_buffer_frame = drowpos + column * 3;
+			swap(buffer_frame[position_buffer_frame], buffer_frame[position_rendered_frame]);
+			swap(buffer_frame[position_buffer_frame+1], buffer_frame[position_rendered_frame+1]);
+			swap(buffer_frame[position_buffer_frame+2], buffer_frame[position_rendered_frame+2]);
+		}
+	}
+	return buffer_frame;
 }
 
 /***********************************************************************************************************************
@@ -101,7 +204,19 @@ unsigned char *processMirrorX(unsigned char *buffer_frame, unsigned int width, u
  * @return
  **********************************************************************************************************************/
 unsigned char *processMirrorY(unsigned char *buffer_frame, unsigned width, unsigned height, int _unused) {
-    return processMirrorYReference(buffer_frame, width, height, _unused);
+	char tmp;
+	// store shifted pixels to temporary buffer
+	for (int row = 0; row < height; row++) {
+		int rowpos = row * height * 3;
+		for (int column = 0; column * 2 < width; column++) {
+			int position_rendered_frame = rowpos + column * 3;
+			int position_buffer_frame = rowpos + (width - column - 1) * 3;
+			swap(buffer_frame[position_buffer_frame], buffer_frame[position_rendered_frame]);
+			swap(buffer_frame[position_buffer_frame+1], buffer_frame[position_rendered_frame+1]);
+			swap(buffer_frame[position_buffer_frame+2], buffer_frame[position_rendered_frame+2]);
+		}
+	}
+	return buffer_frame;
 }
 
 /***********************************************************************************************************************
