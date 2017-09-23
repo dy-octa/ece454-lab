@@ -14,22 +14,11 @@
  * Note2: You can assume the object will never be moved off the screen
  **********************************************************************************************************************/
 unsigned char *processMoveUp(unsigned char *buffer_frame, unsigned width, unsigned height, int offset) {
-    for (int row = 0; row < (height - offset); row++) {
-	    int rowpos = row * width * 3;
-	    int drowpos = (row + offset) * width * 3;
-        for (int column = 0; column < width; column++) {
-            int position_rendered_frame = rowpos + column * 3;
-            int position_buffer_frame = drowpos + column * 3;
-            buffer_frame[position_rendered_frame] = buffer_frame[position_buffer_frame];
-            buffer_frame[position_rendered_frame + 1] = buffer_frame[position_buffer_frame + 1];
-            buffer_frame[position_rendered_frame + 2] = buffer_frame[position_buffer_frame + 2];
-        }
-    }
-
-    // fill left over pixels with white pixels
-	int position_buffer_frame = (height - offset) * width * 3;
 	int position_end_buffer_frame = height * width * 3;
-	memset(buffer_frame + position_buffer_frame, 255, position_end_buffer_frame - position_buffer_frame);
+	int len = offset * width * 3;
+	memmove(buffer_frame, buffer_frame + len, position_end_buffer_frame - len);
+    // fill left over pixels with white pixels
+	memset(buffer_frame + position_end_buffer_frame - len, 255, len);
 	return buffer_frame;
 }
 
@@ -56,8 +45,10 @@ unsigned char *processMoveRight(unsigned char *buffer_frame, unsigned width, uns
 	}
 
 	// fill left over pixels with white pixels
-	for (int row = 0; row < height; row++)
-		memset(buffer_frame + row * width * 3, 255, offset * 3);
+	int row_delta = width * 3;
+	char* row_lim = buffer_frame + height * row_delta;
+	for (char* row = buffer_frame; row < row_lim; row+=row_delta)
+		memset(row, 255, offset * 3);
 	return buffer_frame;
 }
 
