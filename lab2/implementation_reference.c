@@ -321,6 +321,7 @@ unsigned char *processMirrorYReference(unsigned char *buffer_frame, unsigned wid
 void implementation_driver_reference(struct kv *sensor_values, int sensor_values_count, unsigned char *frame_buffer,
                                      unsigned int width, unsigned int height, bool grading_mode) {
     int processed_frames = 0;
+//	writeBMP(width, height, frame_buffer, "0ref.bmp");
     for (int sensorValueIdx = 0; sensorValueIdx < sensor_values_count; sensorValueIdx++) {
 //        printf("Processing sensor value #%d: %s, %d\n", sensorValueIdx, sensor_values[sensorValueIdx].key,
 //               sensor_values[sensorValueIdx].value);
@@ -351,6 +352,9 @@ void implementation_driver_reference(struct kv *sensor_values, int sensor_values
         }
         processed_frames += 1;
         if (processed_frames % 25 == 0) {
+//            char filename[100];
+//            sprintf(filename, "%dref.bmp", processed_frames);
+//            writeBMP(width, height, frame_buffer, filename);
             recordFrame(frame_buffer, width, height, grading_mode);
         }
     }

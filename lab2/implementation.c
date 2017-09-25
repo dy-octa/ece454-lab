@@ -5,218 +5,12 @@
 #include "implementation_reference.h"   // DO NOT REMOVE this line
 
 /***********************************************************************************************************************
- * @param buffer_frame - pointer pointing to a buffer storing the imported 24-bit bitmap image
- * @param width - width of the imported 24-bit bitmap image
- * @param height - height of the imported 24-bit bitmap image
- * @param offset - number of pixels to shift the object in bitmap image up
- * @return - pointer pointing a buffer storing a modified 24-bit bitmap image
- * Note1: White pixels RGB(255,255,255) are treated as background. Object in the image refers to non-white pixels.
- * Note2: You can assume the object will never be moved off the screen
- **********************************************************************************************************************/
-unsigned char *processMoveUp(unsigned char *buffer_frame, unsigned width, unsigned height, int offset) {
-	int position_end_buffer_frame = height * width * 3;
-	int len = offset * width * 3;
-	memmove(buffer_frame, buffer_frame + len, position_end_buffer_frame - len);
-    // fill left over pixels with white pixels
-	memset(buffer_frame + position_end_buffer_frame - len, 255, len);
-	return buffer_frame;
-}
-
-/***********************************************************************************************************************
- * @param buffer_frame - pointer pointing to a buffer storing the imported 24-bit bitmap image
- * @param width - width of the imported 24-bit bitmap image
- * @param height - height of the imported 24-bit bitmap image
- * @param offset - number of pixels to shift the object in bitmap image left
- * @return - pointer pointing a buffer storing a modified 24-bit bitmap image
- * Note1: White pixels RGB(255,255,255) are treated as background. Object in the image refers to non-white pixels.
- * Note2: You can assume the object will never be moved off the screen
- **********************************************************************************************************************/
-unsigned char *processMoveRight(unsigned char *buffer_frame, unsigned width, unsigned height, int offset) {
-	// store shifted pixels to temporary buffer
-	for (int row = 0; row < height; row++) {
-		int rowpos = row * width * 3;
-		for (int column = width - 1; column >= offset; column--) {
-			int position_rendered_frame =  rowpos + column * 3;
-			int position_buffer_frame = rowpos + (column - offset) * 3;
-			buffer_frame[position_rendered_frame] = buffer_frame[position_buffer_frame];
-			buffer_frame[position_rendered_frame + 1] = buffer_frame[position_buffer_frame + 1];
-			buffer_frame[position_rendered_frame + 2] = buffer_frame[position_buffer_frame + 2];
-		}
-	}
-
-	// fill left over pixels with white pixels
-	int row_delta = width * 3;
-	char* row_lim = buffer_frame + height * row_delta;
-	for (char* row = buffer_frame; row < row_lim; row+=row_delta)
-		memset(row, 255, offset * 3);
-	return buffer_frame;
-}
-
-/***********************************************************************************************************************
- * @param buffer_frame - pointer pointing to a buffer storing the imported 24-bit bitmap image
- * @param width - width of the imported 24-bit bitmap image
- * @param height - height of the imported 24-bit bitmap image
- * @param offset - number of pixels to shift the object in bitmap image up
- * @return - pointer pointing a buffer storing a modified 24-bit bitmap image
- * Note1: White pixels RGB(255,255,255) are treated as background. Object in the image refers to non-white pixels.
- * Note2: You can assume the object will never be moved off the screen
- **********************************************************************************************************************/
-unsigned char *processMoveDown(unsigned char *buffer_frame, unsigned width, unsigned height, int offset) {
-	// store shifted pixels to temporary buffer
-	for (int row = height - 1; row >= offset; row--) {
-		int rowpos = row * width * 3;
-		int drowpos = (row - offset) * width * 3;
-		for (int column = 0; column < width; column++) {
-			int position_rendered_frame = rowpos + column * 3;
-			int position_buffer_frame = drowpos + column * 3;
-			buffer_frame[position_rendered_frame] = buffer_frame[position_buffer_frame];
-			buffer_frame[position_rendered_frame + 1] = buffer_frame[position_buffer_frame + 1];
-			buffer_frame[position_rendered_frame + 2] = buffer_frame[position_buffer_frame + 2];
-		}
-	}
-
-	// fill left over pixels with white pixels
-	memset(buffer_frame, 255, offset * width * 3);
-	return buffer_frame;
-}
-
-/***********************************************************************************************************************
- * @param buffer_frame - pointer pointing to a buffer storing the imported 24-bit bitmap image
- * @param width - width of the imported 24-bit bitmap image
- * @param height - height of the imported 24-bit bitmap image
- * @param offset - number of pixels to shift the object in bitmap image right
- * @return - pointer pointing a buffer storing a modified 24-bit bitmap image
- * Note1: White pixels RGB(255,255,255) are treated as background. Object in the image refers to non-white pixels.
- * Note2: You can assume the object will never be moved off the screen
- **********************************************************************************************************************/
-unsigned char *processMoveLeft(unsigned char *buffer_frame, unsigned width, unsigned height, int offset) {
-	// store shifted pixels to temporary buffer
-	for (int row = 0; row < height; row++) {
-		int rowpos = row * width * 3;
-		for (int column = 0; column < (width - offset); column++) {
-			int position_rendered_frame = rowpos + column * 3;
-			int position_buffer_frame = rowpos + (column + offset) * 3;
-			buffer_frame[position_rendered_frame] = buffer_frame[position_buffer_frame];
-			buffer_frame[position_rendered_frame + 1] = buffer_frame[position_buffer_frame + 1];
-			buffer_frame[position_rendered_frame + 2] = buffer_frame[position_buffer_frame + 2];
-		}
-	}
-
-	// fill left over pixels with white pixels
-	for (int row = 0; row < height; row++)
-		memset(buffer_frame + row * width * 3 + (width - offset) * 3, 255, offset * 3);
-	return buffer_frame;
-}
-
-/***********************************************************************************************************************
- * @param buffer_frame - pointer pointing to a buffer storing the imported 24-bit bitmap image
- * @param width - width of the imported 24-bit bitmap image
- * @param height - height of the imported 24-bit bitmap image
- * @param rotate_iteration - rotate object inside frame buffer clockwise by 90 degrees, <iteration> times
- * @return - pointer pointing a buffer storing a modified 24-bit bitmap image
- * Note: You can assume the frame will always be square and you will be rotating the entire image
- **********************************************************************************************************************/
-unsigned char *processRotateCW(unsigned char *buffer_frame, unsigned width, unsigned height,
-                               int rotate_iteration) {
-	// allocate memory for temporary image buffer
-	unsigned char static *rendered_frame = NULL;
-	if (rendered_frame == NULL)
-		rendered_frame = allocateFrame(width, height);
-
-	rotate_iteration %= 4;
-	// store shifted pixels to temporary buffer
-	for (int iteration = 0; iteration < rotate_iteration; iteration++) {
-		int render_column = width - 1;
-		int render_row = 0;
-		for (int row = 0; row < width; row++) {
-			for (int column = 0; column < height; column++) {
-				int position_frame_buffer = row * width * 3 + column * 3;
-				rendered_frame[render_row * width * 3 + render_column * 3] = buffer_frame[position_frame_buffer];
-				rendered_frame[render_row * width * 3 + render_column * 3 + 1] = buffer_frame[position_frame_buffer + 1];
-				rendered_frame[render_row * width * 3 + render_column * 3 + 2] = buffer_frame[position_frame_buffer + 2];
-				render_row += 1;
-			}
-			render_row = 0;
-			render_column -= 1;
-		}
-
-	}
-
-	// copy the temporary buffer back to original frame buffer
-	buffer_frame = copyFrame(rendered_frame, buffer_frame, width, height);
-
-	// return a pointer to the updated image buffer
-	return buffer_frame;
-}
-
-/***********************************************************************************************************************
- * @param buffer_frame - pointer pointing to a buffer storing the imported 24-bit bitmap image
- * @param width - width of the imported 24-bit bitmap image
- * @param height - height of the imported 24-bit bitmap image
- * @param rotate_iteration - rotate object inside frame buffer counter clockwise by 90 degrees, <iteration> times
- * @return - pointer pointing a buffer storing a modified 24-bit bitmap image
- * Note: You can assume the frame will always be square and you will be rotating the entire image
- **********************************************************************************************************************/
-unsigned char *processRotateCCW(unsigned char *buffer_frame, unsigned width, unsigned height,
-                                int rotate_iteration) {
-	return buffer_frame = processRotateCWReference(buffer_frame, width, height, 3 * rotate_iteration);
-}
-
-/***********************************************************************************************************************
- * @param buffer_frame - pointer pointing to a buffer storing the imported 24-bit bitmap image
- * @param width - width of the imported 24-bit bitmap image
- * @param height - height of the imported 24-bit bitmap image
- * @param _unused - this field is unused
- * @return
- **********************************************************************************************************************/
-#define swap(a,b) (tmp=a,a=b,b=tmp)
-unsigned char *processMirrorX(unsigned char *buffer_frame, unsigned int width, unsigned int height, int _unused) {
-	char tmp;
-	// store shifted pixels to temporary buffer
-	for (int row = 0; row * 2 < height; row++) {
-		int rowpos = row * height * 3;
-		int drowpos = (height - row - 1) * height * 3;
-		for (int column = 0; column < width; column++) {
-			int position_rendered_frame = rowpos + column * 3;
-			int position_buffer_frame = drowpos + column * 3;
-			swap(buffer_frame[position_buffer_frame], buffer_frame[position_rendered_frame]);
-			swap(buffer_frame[position_buffer_frame+1], buffer_frame[position_rendered_frame+1]);
-			swap(buffer_frame[position_buffer_frame+2], buffer_frame[position_rendered_frame+2]);
-		}
-	}
-	return buffer_frame;
-}
-
-/***********************************************************************************************************************
- * @param buffer_frame - pointer pointing to a buffer storing the imported 24-bit bitmap image
- * @param width - width of the imported 24-bit bitmap image
- * @param height - height of the imported 24-bit bitmap image
- * @param _unused - this field is unused
- * @return
- **********************************************************************************************************************/
-unsigned char *processMirrorY(unsigned char *buffer_frame, unsigned width, unsigned height, int _unused) {
-	char tmp;
-	// store shifted pixels to temporary buffer
-	for (int row = 0; row < height; row++) {
-		int rowpos = row * height * 3;
-		for (int column = 0; column * 2 < width; column++) {
-			int position_rendered_frame = rowpos + column * 3;
-			int position_buffer_frame = rowpos + (width - column - 1) * 3;
-			swap(buffer_frame[position_buffer_frame], buffer_frame[position_rendered_frame]);
-			swap(buffer_frame[position_buffer_frame+1], buffer_frame[position_rendered_frame+1]);
-			swap(buffer_frame[position_buffer_frame+2], buffer_frame[position_rendered_frame+2]);
-		}
-	}
-	return buffer_frame;
-}
-
-/***********************************************************************************************************************
  * WARNING: Do not modify the implementation_driver and team info prototype (name, parameter, return value) !!!
  *          Do not forget to modify the team_name and team member information !!!
  **********************************************************************************************************************/
 void print_team_info(){
     // Please modify this field with something interesting
-    char team_name[] = "default-name";
+    char team_name[] = "Cheesecake";
 
     // Please fill in your information
     char student1_first_name[] = "Andrei";
@@ -254,41 +48,108 @@ void print_team_info(){
  ***********************************************************************************************************************
  *
  **********************************************************************************************************************/
+void multiMatrix(int A[3][3], int B[3][3], int C[3][3]){
+	int sum = 0;
+
+	/*for(int i = 0; i \x3C 3; i++){
+		for(int j = 0; j \x3C 3; j++){
+			sum = 0;
+			for(int k = 0; k \x3C 3; k++){
+				sum = sum +  (A[i][k] * B[k][j]);
+			}
+			C[i][j] = sum;
+		}
+	}*/
+
+	C[0][0] = (A[0][0]*B[0][0]) + (A[0][1]*B[1][0] + (A[0][2]*B[2][0]));
+	C[0][1] = (A[0][0]*B[0][1]) + (A[0][1]*B[1][1] + (A[0][2]*B[2][1]));
+	C[0][2] = (A[0][0]*B[0][2]) + (A[0][1]*B[1][2] + (A[0][2]*B[2][2]));
+	C[1][0] = (A[1][0]*B[0][0]) + (A[1][1]*B[1][0] + (A[1][2]*B[2][0]));
+	C[1][1] = (A[1][0]*B[0][1]) + (A[1][1]*B[1][1] + (A[1][2]*B[2][1]));
+	C[1][2] = (A[1][0]*B[0][2]) + (A[1][1]*B[1][2] + (A[1][2]*B[2][2]));
+	C[2][0] = (A[2][0]*B[0][0]) + (A[2][1]*B[1][0] + (A[2][2]*B[2][0]));
+	C[2][1] = (A[2][0]*B[0][1]) + (A[2][1]*B[1][1] + (A[2][2]*B[2][1]));
+	C[2][2] = (A[2][0]*B[0][2]) + (A[2][1]*B[1][2] + (A[2][2]*B[2][2]));
+
+
+	return;
+}
 void implementation_driver(struct kv *sensor_values, int sensor_values_count, unsigned char *frame_buffer,
                            unsigned int width, unsigned int height, bool grading_mode) {
     int processed_frames = 0;
+	int final_matrix[2][3][3] = {{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}, {}};
+	int matUp[3][3] = {{1, 0, 0}, {0, 1, 0}, {-1, 0, 1}};
+	int matDown[3][3] = {{1, 0, 0}, {0, 1, 0}, {1, 0, 1}};
+	int matLeft[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, -1, 1}};
+	int matRight[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 1, 1}};
+	int matRot[3][3][3] = {{{0, -1, 0}, {1, 0, 0}, {0, width - 1, 1}},
+		                {{-1, 0, 0}, {0, -1, 0}, {width - 1, width - 1, 1}},
+		                {{0, 1, 0}, {-1, 0, 0}, {width - 1, 0, 1}}};
+	int matFlipX[3][3] = {{-1, 0, 0}, {0, 1, 0}, {height - 1, 0, 1}};
+	int matFlipY[3][3] = {{1, 0, 0}, {0, -1, 0}, {0, width - 1, 1}};
+	int current_matrix = 0;
+
+
+	unsigned char* render_buffer = allocateFrame(width, height);
+
     for (int sensorValueIdx = 0; sensorValueIdx < sensor_values_count; sensorValueIdx++) {
-//        printf("Processing sensor value #%d: %s, %d\n", sensorValueIdx, sensor_values[sensorValueIdx].key,
-//               sensor_values[sensorValueIdx].value);
         if (!strcmp(sensor_values[sensorValueIdx].key, "W")) {
-            frame_buffer = processMoveUp(frame_buffer, width, height, sensor_values[sensorValueIdx].value);
-//            printBMP(width, height, frame_buffer);
+	        matUp[2][0] = - sensor_values[sensorValueIdx].value;
+	        multiMatrix(final_matrix[current_matrix], matUp, final_matrix[current_matrix^1]);
         } else if (!strcmp(sensor_values[sensorValueIdx].key, "A")) {
-            frame_buffer = processMoveLeft(frame_buffer, width, height, sensor_values[sensorValueIdx].value);
-//            printBMP(width, height, frame_buffer);
+	        matLeft[2][1] = - sensor_values[sensorValueIdx].value;
+	        multiMatrix(final_matrix[current_matrix], matLeft, final_matrix[current_matrix^1]);
         } else if (!strcmp(sensor_values[sensorValueIdx].key, "S")) {
-            frame_buffer = processMoveDown(frame_buffer, width, height, sensor_values[sensorValueIdx].value);
-//            printBMP(width, height, frame_buffer);
+	        matDown[2][0] = sensor_values[sensorValueIdx].value;
+	        multiMatrix(final_matrix[current_matrix], matDown, final_matrix[current_matrix^1]);
         } else if (!strcmp(sensor_values[sensorValueIdx].key, "D")) {
-            frame_buffer = processMoveRight(frame_buffer, width, height, sensor_values[sensorValueIdx].value);
-//            printBMP(width, height, frame_buffer);
+	        matRight[2][1] = sensor_values[sensorValueIdx].value;
+	        multiMatrix(final_matrix[current_matrix], matRight, final_matrix[current_matrix^1]);
         } else if (!strcmp(sensor_values[sensorValueIdx].key, "CW")) {
-            frame_buffer = processRotateCW(frame_buffer, width, height, sensor_values[sensorValueIdx].value);
-//            printBMP(width, height, frame_buffer);
+	        multiMatrix(final_matrix[current_matrix], matRot[(sensor_values[sensorValueIdx].value&4) - 1], final_matrix[current_matrix^1]);
         } else if (!strcmp(sensor_values[sensorValueIdx].key, "CCW")) {
-            frame_buffer = processRotateCCW(frame_buffer, width, height, sensor_values[sensorValueIdx].value);
-//            printBMP(width, height, frame_buffer);
+	        multiMatrix(final_matrix[current_matrix], matRot[(4 - (sensor_values[sensorValueIdx].value&4)) - 1], final_matrix[current_matrix^1]);
         } else if (!strcmp(sensor_values[sensorValueIdx].key, "MX")) {
-            frame_buffer = processMirrorX(frame_buffer, width, height, sensor_values[sensorValueIdx].value);
-//            printBMP(width, height, frame_buffer);
+	        multiMatrix(final_matrix[current_matrix], matFlipX, final_matrix[current_matrix^1]);
         } else if (!strcmp(sensor_values[sensorValueIdx].key, "MY")) {
-            frame_buffer = processMirrorY(frame_buffer, width, height, sensor_values[sensorValueIdx].value);
-//            printBMP(width, height, frame_buffer);
+	        multiMatrix(final_matrix[current_matrix], matFlipY, final_matrix[current_matrix^1]);
         }
+	    current_matrix ^= 1;
         processed_frames += 1;
+//	    printf("%d\n", processed_frames);
         if (processed_frames % 25 == 0) {
-            verifyFrame(frame_buffer, width, height, grading_mode);
+//			printf("Current matrix:\n\t%d %d %d\n\t%d %d %d\n\t%d %d %d\n",
+//			       final_matrix[current_matrix][0][0], final_matrix[current_matrix][0][1], final_matrix[current_matrix][0][2],
+//			       final_matrix[current_matrix][1][0], final_matrix[current_matrix][1][1], final_matrix[current_matrix][1][2],
+//			       final_matrix[current_matrix][2][0], final_matrix[current_matrix][2][1], final_matrix[current_matrix][2][2]);
+	        memset(render_buffer, 255, width * height * 3);
+	        for (int row = 0; row < height; ++row)
+		        for (int col = 0; col < width; ++col) {
+			        int pos = row * width * 3 + col * 3;
+			        if (!(frame_buffer[pos] == 255 && frame_buffer[pos + 1] == 255 && frame_buffer[pos + 2] == 255)) {
+				        int render_row = row * final_matrix[current_matrix][0][0] + col * final_matrix[current_matrix][1][0] + final_matrix[current_matrix][2][0];
+				        int render_col = row * final_matrix[current_matrix][0][1] + col * final_matrix[current_matrix][1][1] + final_matrix[current_matrix][2][1];
+//				        if (!(render_col >= 0 && render_col < width && render_row >= 0 && render_row < height) ) {
+//					        printf("(%d, %d) -> (%d, %d)", row, col, render_row, render_col);
+//				        }
+				        int render_pos = render_row * width * 3 + render_col * 3;
+				        render_buffer[render_pos] = frame_buffer[pos];
+				        render_buffer[render_pos + 1] = frame_buffer[pos + 1];
+				        render_buffer[render_pos + 2] = frame_buffer[pos + 2];
+			        }
+		        }
+            verifyFrame(render_buffer, width, height, grading_mode);
+//	        printf("%d finished\n", processed_frames);
+
+//	        char filename[100];
+//	        sprintf(filename, "%dimp.bmp", processed_frames);
+//	        writeBMP(width, height, render_buffer, filename);
+
+//	        final_matrix[current_matrix][0][0] = 1, final_matrix[current_matrix][0][1] = 0, final_matrix[current_matrix][0][2] =0;
+//	        final_matrix[current_matrix][1][0] = 0, final_matrix[current_matrix][1][1] = 1, final_matrix[current_matrix][1][2] =0;
+//	        final_matrix[current_matrix][2][0] = 0, final_matrix[current_matrix][2][1] = 0, final_matrix[current_matrix][2][2] =1;
         }
     }
+	deallocateFrame(render_buffer);
     return;
 }

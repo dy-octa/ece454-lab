@@ -10,6 +10,7 @@ struct kv {
     int value;
 };
 
+void writeBMP(int w, int h, unsigned char* img, char* filename);
 void printBMP(unsigned width, unsigned height, unsigned char *frame_buffer);
 unsigned char* allocateFrame(unsigned width, unsigned height);
 void deallocateFrame(unsigned char *frame);

@@ -7,6 +7,42 @@
 /***********************************************************************************************************************
  * Warning: DO NOT MODIFY or SUBMIT this file
  **********************************************************************************************************************/
+void writeBMP(int w, int h, unsigned char* img, char* filename) {
+    FILE *f;
+    int filesize = 54 + 3*w*h;  //w is your image width, h is image height, both int
+
+
+
+    unsigned char bmpfileheader[14] = {'B','M', 0,0,0,0, 0,0, 0,0, 54,0,0,0};
+    unsigned char bmpinfoheader[40] = {40,0,0,0, 0,0,0,0, 0,0,0,0, 1,0, 24,0};
+    unsigned char bmppad[3] = {0,0,0};
+
+    bmpfileheader[ 2] = (unsigned char)(filesize    );
+    bmpfileheader[ 3] = (unsigned char)(filesize>> 8);
+    bmpfileheader[ 4] = (unsigned char)(filesize>>16);
+    bmpfileheader[ 5] = (unsigned char)(filesize>>24);
+
+    bmpinfoheader[ 4] = (unsigned char)(       w    );
+    bmpinfoheader[ 5] = (unsigned char)(       w>> 8);
+    bmpinfoheader[ 6] = (unsigned char)(       w>>16);
+    bmpinfoheader[ 7] = (unsigned char)(       w>>24);
+    bmpinfoheader[ 8] = (unsigned char)(       h    );
+    bmpinfoheader[ 9] = (unsigned char)(       h>> 8);
+    bmpinfoheader[10] = (unsigned char)(       h>>16);
+    bmpinfoheader[11] = (unsigned char)(       h>>24);
+
+    f = fopen(filename,"wb");
+    fwrite(bmpfileheader,1,14,f);
+    fwrite(bmpinfoheader,1,40,f);
+    for(int i=0; i<h; i++)
+    {
+        fwrite(img+(w*(h-i-1)*3),3,w,f);
+        fwrite(bmppad,1,(4-(w*3)%4)%4,f);
+    }
+
+    fclose(f);
+}
+
 
 void printBMP(unsigned width, unsigned height, unsigned char *frame_buffer) {
     int row;
@@ -75,6 +111,14 @@ void verifyFrame(unsigned char *frame_buffer, unsigned int width, unsigned int h
     } else {
         // verify frame, memcmp returns 0 if buffer is the same, -1 or +1 when buffers are different
         if (memcmp(frame_buffer, recorded_frames[verified_frames_count], width * height * 3)){
+//	        for (int i=0; i < height; ++i)
+//		        for (int j=0; j< width; ++j) {
+//			        int pos = i * width * 3 + j * 3;
+//			        if ((frame_buffer[pos] != recorded_frames[verified_frames_count][pos])
+//			            || frame_buffer[pos + 1] != recorded_frames[verified_frames_count][pos]
+//			               || frame_buffer[pos + 2] != recorded_frames[verified_frames_count][pos + 2])
+//				        printf("ERR: (%d, %d)\n", i, j);
+//		        }
             printf("ERROR: frame #%d is different compared to the reference implementation\n", verified_frames_count);
             exit (-1);
         } else {
