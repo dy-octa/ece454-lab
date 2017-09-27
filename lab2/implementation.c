@@ -104,6 +104,24 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
 	Matrix matFlipY = {1, 0, width - 1}; //{{1, 0, 0}, {0, -1, 0}, {0, width - 1, 1}};
 	int current_matrix = 0;
 
+	int testArray[10669];
+	int testRow[10669];
+	int testCol[10669];
+	int i = 0;
+	for (int row = 0; row < height; ++row){
+		for (int col = 0; col < width; ++col) {
+			int pos = row * width * 3 + col * 3;
+			if (!(frame_buffer[pos] == 255 && frame_buffer[pos + 1] == 255 && frame_buffer[pos + 2] == 255)) {
+			 //printf("what is i: %d\n", i);
+			 testArray[i] = row * width * 3 + col * 3;
+			 testRow[i] = row;
+			 testCol[i] = col;
+			 i++;
+			}
+
+		}
+	}
+
 
 	unsigned char* render_buffer = allocateFrame(width, height);
 
@@ -142,7 +160,7 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
         if (processed_frames % 25 == 0) {
 //	        printf("Process %d...\n", processed_frames);
 	        memset(render_buffer, 255, width * height * 3);
-	        for (int row = 0; row < height; ++row)
+	        /*for (int row = 0; row < height; ++row)
 		        for (int col = 0; col < width; ++col) {
 			        int pos = row * width * 3 + col * 3;
 			        if (!(frame_buffer[pos] == 255 && frame_buffer[pos + 1] == 255 && frame_buffer[pos + 2] == 255)) {
@@ -165,7 +183,17 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
 				        render_buffer[render_pos + 1] = frame_buffer[pos + 1];
 				        render_buffer[render_pos + 2] = frame_buffer[pos + 2];
 			        }
-		        }
+		        }*/
+
+	        for (int j = 0; j < i; j++){
+	        	int render_row = testRow[j] * final_matrix[current_matrix][0][0] + testCol[j] * final_matrix[current_matrix][1][0] + final_matrix[current_matrix][2][0];
+	        	int render_col = testRow[j] * final_matrix[current_matrix][0][1] + testCol[j] * final_matrix[current_matrix][1][1] + final_matrix[current_matrix][2][1];
+	        	int render_pos = render_row * width * 3 + render_col * 3;
+	        	render_buffer[render_pos] = frame_buffer[testArray[j]];
+	        	render_buffer[render_pos + 1] = frame_buffer[testArray[j] + 1];
+	        	render_buffer[render_pos + 2] = frame_buffer[testArray[j] + 2];
+
+	        }
             verifyFrame(render_buffer, width, height, grading_mode);
 //	        printf("%d finished\n", processed_frames);
 
