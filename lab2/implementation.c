@@ -105,10 +105,17 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
         } else if (!strcmp(sensor_values[sensorValueIdx].key, "D")) {
 	        matRight[2][1] = sensor_values[sensorValueIdx].value;
 	        multiMatrix(final_matrix[current_matrix], matRight, final_matrix[current_matrix^1]);
-        } else if (!strcmp(sensor_values[sensorValueIdx].key, "CW")) {
-	        multiMatrix(final_matrix[current_matrix], matRot[(sensor_values[sensorValueIdx].value&4) - 1], final_matrix[current_matrix^1]);
-        } else if (!strcmp(sensor_values[sensorValueIdx].key, "CCW")) {
-	        multiMatrix(final_matrix[current_matrix], matRot[(4 - (sensor_values[sensorValueIdx].value&4)) - 1], final_matrix[current_matrix^1]);
+        } else if (!strcmp(sensor_values[sensorValueIdx].key, "CW") || !strcmp(sensor_values[sensorValueIdx].key, "CCW")) {
+	        int itr = sensor_values[sensorValueIdx].value;
+	        if (!strcmp(sensor_values[sensorValueIdx].key, "CCW"))
+		        itr = - itr;
+	        itr %= 4;
+	        if (itr < 0)
+		        itr = itr + 4;
+//	        printf("Now %s, %d : %d\n", sensor_values[sensorValueIdx].key, sensor_values[sensorValueIdx].value, itr);
+	        if (itr != 0)
+	            multiMatrix(final_matrix[current_matrix], matRot[itr - 1], final_matrix[current_matrix^1]);
+	        else current_matrix ^= 1;
         } else if (!strcmp(sensor_values[sensorValueIdx].key, "MX")) {
 	        multiMatrix(final_matrix[current_matrix], matFlipX, final_matrix[current_matrix^1]);
         } else if (!strcmp(sensor_values[sensorValueIdx].key, "MY")) {

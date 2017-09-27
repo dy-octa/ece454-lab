@@ -6,6 +6,16 @@
 /***********************************************************************************************************************
  * Warning: DO NOT MODIFY or SUBMIT this file
  **********************************************************************************************************************/
+// Declariations
+unsigned char *processMoveUpReference(unsigned char *buffer_frame, unsigned width, unsigned height, int offset);
+unsigned char *processMoveLeftReference(unsigned char *buffer_frame, unsigned width, unsigned height, int offset);
+unsigned char *processMoveDownReference(unsigned char *buffer_frame, unsigned width, unsigned height, int offset);
+unsigned char *processMoveRightReference(unsigned char *buffer_frame, unsigned width, unsigned height, int offset);
+unsigned char *processRotateCWReference(unsigned char *buffer_frame, unsigned width, unsigned height,
+                                        int rotate_iteration);
+unsigned char *processRotateCCWReference(unsigned char *buffer_frame, unsigned width, unsigned height,
+                                        int rotate_iteration);
+
 
 /***********************************************************************************************************************
  * @param buffer_frame - pointer pointing to a buffer storing the imported 24-bit bitmap image
@@ -17,6 +27,11 @@
  * Note2: You can assume the object will never be moved off the screen
  **********************************************************************************************************************/
 unsigned char *processMoveUpReference(unsigned char *buffer_frame, unsigned width, unsigned height, int offset) {
+    // handle negative offsets
+    if (offset < 0){
+        return processMoveDownReference(buffer_frame, width, height, offset * -1);
+    }
+
     // allocate memory for temporary image buffer
     unsigned char *rendered_frame = allocateFrame(width, height);
 
@@ -61,6 +76,11 @@ unsigned char *processMoveUpReference(unsigned char *buffer_frame, unsigned widt
  * Note2: You can assume the object will never be moved off the screen
  **********************************************************************************************************************/
 unsigned char *processMoveLeftReference(unsigned char *buffer_frame, unsigned width, unsigned height, int offset) {
+    // handle negative offsets
+    if (offset < 0){
+        return processMoveRightReference(buffer_frame, width, height, offset * -1);
+    }
+
     // allocate memory for temporary image buffer
     unsigned char *rendered_frame = allocateFrame(width, height);
 
@@ -105,6 +125,11 @@ unsigned char *processMoveLeftReference(unsigned char *buffer_frame, unsigned wi
  * Note2: You can assume the object will never be moved off the screen
  **********************************************************************************************************************/
 unsigned char *processMoveDownReference(unsigned char *buffer_frame, unsigned width, unsigned height, int offset) {
+    // handle negative offsets
+    if (offset < 0){
+        return processMoveUpReference(buffer_frame, width, height, offset * -1);
+    }
+
     // allocate memory for temporary image buffer
     unsigned char *rendered_frame = allocateFrame(width, height);
 
@@ -149,6 +174,11 @@ unsigned char *processMoveDownReference(unsigned char *buffer_frame, unsigned wi
  * Note2: You can assume the object will never be moved off the screen
  **********************************************************************************************************************/
 unsigned char *processMoveRightReference(unsigned char *buffer_frame, unsigned width, unsigned height, int offset) {
+    // handle negative offsets
+    if (offset < 0){
+        return processMoveLeftReference(buffer_frame, width, height, offset * -1);
+    }
+
     // allocate memory for temporary image buffer
     unsigned char *rendered_frame = allocateFrame(width, height);
 
@@ -193,6 +223,11 @@ unsigned char *processMoveRightReference(unsigned char *buffer_frame, unsigned w
  **********************************************************************************************************************/
 unsigned char *processRotateCWReference(unsigned char *buffer_frame, unsigned width, unsigned height,
                                         int rotate_iteration) {
+    // handle negative offsets
+    if (rotate_iteration < 0){
+        return processRotateCCWReference(buffer_frame, width, height, rotate_iteration * -1);
+    }
+
     // allocate memory for temporary image buffer
     unsigned char *rendered_frame = allocateFrame(width, height);
 
@@ -233,9 +268,17 @@ unsigned char *processRotateCWReference(unsigned char *buffer_frame, unsigned wi
  **********************************************************************************************************************/
 unsigned char *processRotateCCWReference(unsigned char *buffer_frame, unsigned width, unsigned height,
                                          int rotate_iteration) {
-    // rotating 90 degrees counter clockwise is equivalent of rotating 270 degrees clockwise
-    for (int iteration = 0; iteration < rotate_iteration; iteration++) {
-        buffer_frame = processRotateCWReference(buffer_frame, width, height, 3);
+    if (rotate_iteration < 0){
+        // handle negative offsets
+        // rotating 90 degrees counter clockwise in opposite direction is equal to 90 degrees in cw direction
+        for (int iteration = 0; iteration > rotate_iteration; iteration--) {
+            buffer_frame = processRotateCWReference(buffer_frame, width, height, 1);
+        }
+    } else {
+        // rotating 90 degrees counter clockwise is equivalent of rotating 270 degrees clockwise
+        for (int iteration = 0; iteration < rotate_iteration; iteration++) {
+            buffer_frame = processRotateCWReference(buffer_frame, width, height, 3);
+        }
     }
 
     // return a pointer to the updated image buffer
@@ -321,7 +364,6 @@ unsigned char *processMirrorYReference(unsigned char *buffer_frame, unsigned wid
 void implementation_driver_reference(struct kv *sensor_values, int sensor_values_count, unsigned char *frame_buffer,
                                      unsigned int width, unsigned int height, bool grading_mode) {
     int processed_frames = 0;
-//	writeBMP(width, height, frame_buffer, "0ref.bmp");
     for (int sensorValueIdx = 0; sensorValueIdx < sensor_values_count; sensorValueIdx++) {
 //        printf("Processing sensor value #%d: %s, %d\n", sensorValueIdx, sensor_values[sensorValueIdx].key,
 //               sensor_values[sensorValueIdx].value);
@@ -355,6 +397,7 @@ void implementation_driver_reference(struct kv *sensor_values, int sensor_values
 //            char filename[100];
 //            sprintf(filename, "%dref.bmp", processed_frames);
 //            writeBMP(width, height, frame_buffer, filename);
+
             recordFrame(frame_buffer, width, height, grading_mode);
         }
     }
