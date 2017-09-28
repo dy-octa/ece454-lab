@@ -48,45 +48,60 @@ void print_team_info(){
  ***********************************************************************************************************************
  *
  **********************************************************************************************************************/
-void multiMatrix(int A[3][3], int B[3][3], int C[3][3]){
-	int sum = 0;
-
-	/*for(int i = 0; i \x3C 3; i++){
-		for(int j = 0; j \x3C 3; j++){
-			sum = 0;
-			for(int k = 0; k \x3C 3; k++){
-				sum = sum +  (A[i][k] * B[k][j]);
-			}
-			C[i][j] = sum;
-		}
-	}*/
-
-	C[0][0] = (A[0][0]*B[0][0]) + (A[0][1]*B[1][0] + (A[0][2]*B[2][0]));
-	C[0][1] = (A[0][0]*B[0][1]) + (A[0][1]*B[1][1] + (A[0][2]*B[2][1]));
-	C[0][2] = (A[0][0]*B[0][2]) + (A[0][1]*B[1][2] + (A[0][2]*B[2][2]));
-	C[1][0] = (A[1][0]*B[0][0]) + (A[1][1]*B[1][0] + (A[1][2]*B[2][0]));
-	C[1][1] = (A[1][0]*B[0][1]) + (A[1][1]*B[1][1] + (A[1][2]*B[2][1]));
-	C[1][2] = (A[1][0]*B[0][2]) + (A[1][1]*B[1][2] + (A[1][2]*B[2][2]));
-	C[2][0] = (A[2][0]*B[0][0]) + (A[2][1]*B[1][0] + (A[2][2]*B[2][0]));
-	C[2][1] = (A[2][0]*B[0][1]) + (A[2][1]*B[1][1] + (A[2][2]*B[2][1]));
-	C[2][2] = (A[2][0]*B[0][2]) + (A[2][1]*B[1][2] + (A[2][2]*B[2][2]));
-
-
+ typedef struct {
+	 char typeA;
+	 int B[2];
+ } Matrix;
+char typeAMuls[] = {0, 1, 2, 3, 4, 5, 6, 7, 1, 0, 3, 2, 6, 7, 4, 5, 2, 3, 0, 1, 5, 4, 7, 6, 3, 2, 1, 0, 7, 6, 5, 4, 4,
+                    5, 6, 7, 0, 1, 2, 3, 5, 4, 7, 6, 2, 3, 0, 1, 6, 7, 4, 5, 1, 0, 3, 2, 7, 6, 5, 4, 3, 2, 1, 0};
+void multiMatrix(Matrix* A, Matrix* B, Matrix* C){
+	C->typeA = typeAMuls[((short)(A->typeA))<<3 | ((short)(B->typeA))];
+	switch (B->typeA) {
+		case 0: C->B[0] = A->B[0]; C->B[1] = A->B[1];break;
+		case 1: C->B[0] = A->B[0]; C->B[1] = -A->B[1];break;
+		case 2: C->B[0] = -A->B[0]; C->B[1] = A->B[1];break;
+		case 3: C->B[0] = -A->B[0]; C->B[1] = -A->B[1];break;
+		case 4: C->B[0] = A->B[1]; C->B[1] = A->B[0];break;
+		case 5: C->B[0] = A->B[1]; C->B[1] = -A->B[0];break;
+		case 6: C->B[0] = -A->B[1]; C->B[1] = A->B[0];break;
+		case 7: C->B[0] = -A->B[1]; C->B[1] = -A->B[0];break;
+	}
+	C->B[0] += B->B[0];
+	C->B[1] += B->B[1];
 	return;
 }
+/*
+ * All the transformation matrices can be represented as a 3*3 matrix M = [A 0; B 1], where A is a 2*2 matrix and B is a
+ * 1*2 matrix.
+ * A is a diagonal matrix or a anti-diagonal matrix, and the non-zero values are 1 or -1, like [-1 0; 0 1] or
+ * [0 1; -1 0]. There're only 8 kinds of A-like matrices.
+ * Inspect the multiplication results of a series of M: M_1 * M_2 = [A_1*A_2 0; B_1*A_2+B_2 1]. A_1 * A_2 is still an
+ * A-like submatrix. The new B can be directly resolved from the type of A.
+ * Therefore we can only use 3 numbers to represent a matrix: type of A and two values in B.
+ */
+// Standard A-types:
+//{1 0; 0 1}
+//{1 0; 0 -1}
+//{-1 0; 0 1}
+//{-1 0; 0 -1}
+//{0 1; 1 0}
+//{0 -1; 1 0}
+//{0 1; -1 0}
+//{0 -1; -1 0}
 void implementation_driver(struct kv *sensor_values, int sensor_values_count, unsigned char *frame_buffer,
                            unsigned int width, unsigned int height, bool grading_mode) {
     int processed_frames = 0;
-	int final_matrix[2][3][3] = {{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}, {}};
-	int matUp[3][3] = {{1, 0, 0}, {0, 1, 0}, {-1, 0, 1}};
-	int matDown[3][3] = {{1, 0, 0}, {0, 1, 0}, {1, 0, 1}};
-	int matLeft[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, -1, 1}};
-	int matRight[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 1, 1}};
-	int matRot[3][3][3] = {{{0, -1, 0}, {1, 0, 0}, {0, width - 1, 1}},
-		                {{-1, 0, 0}, {0, -1, 0}, {width - 1, width - 1, 1}},
-		                {{0, 1, 0}, {-1, 0, 0}, {width - 1, 0, 1}}};
-	int matFlipX[3][3] = {{-1, 0, 0}, {0, 1, 0}, {height - 1, 0, 1}};
-	int matFlipY[3][3] = {{1, 0, 0}, {0, -1, 0}, {0, width - 1, 1}};
+	Matrix final_matrix[2] = {{0, 0, 0}, {0, 0, 0}}; // {{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}, {}};
+	Matrix matUp = {0, 0, 0}; // {{1, 0, 0}, {0, 1, 0}, {-1, 0, 1}};
+	Matrix matDown = {0, 0, 0}; // {{1, 0, 0}, {0, 1, 0}, {1, 0, 1}};
+	Matrix matLeft = {0, 0, 0}; // {{1, 0, 0}, {0, 1, 0}, {0, -1, 1}};
+	Matrix matRight = {0, 0, 0}; // {{1, 0, 0}, {0, 1, 0}, {0, 1, 1}};
+	Matrix matRot[3] = {{5, 0, width - 1}, {3, width - 1, width - 1}, {6, width - 1, 0}};
+//						{{{0, -1, 0}, {1, 0, 0}, {0, width - 1, 1}},
+//						 {{-1, 0, 0}, {0, -1, 0}, {width - 1, width - 1, 1}},
+//						 {{0, 1, 0}, {-1, 0, 0}, {width - 1, 0, 1}}};
+	Matrix matFlipX = {2, height - 1, 0}; // {{-1, 0, 0}, {0, 1, 0}, {height - 1, 0, 1}};
+	Matrix matFlipY = {1, 0, width - 1}; //{{1, 0, 0}, {0, -1, 0}, {0, width - 1, 1}};
 	int current_matrix = 0;
 
 
@@ -94,17 +109,17 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
 
     for (int sensorValueIdx = 0; sensorValueIdx < sensor_values_count; sensorValueIdx++) {
         if (!strcmp(sensor_values[sensorValueIdx].key, "W")) {
-	        matUp[2][0] = - sensor_values[sensorValueIdx].value;
-	        multiMatrix(final_matrix[current_matrix], matUp, final_matrix[current_matrix^1]);
+	        matUp.B[0] = - sensor_values[sensorValueIdx].value;
+	        multiMatrix(&final_matrix[current_matrix], &matUp, &final_matrix[current_matrix^1]);
         } else if (!strcmp(sensor_values[sensorValueIdx].key, "A")) {
-	        matLeft[2][1] = - sensor_values[sensorValueIdx].value;
-	        multiMatrix(final_matrix[current_matrix], matLeft, final_matrix[current_matrix^1]);
+	        matLeft.B[1] = - sensor_values[sensorValueIdx].value;
+	        multiMatrix(&final_matrix[current_matrix], &matLeft, &final_matrix[current_matrix^1]);
         } else if (!strcmp(sensor_values[sensorValueIdx].key, "S")) {
-	        matDown[2][0] = sensor_values[sensorValueIdx].value;
-	        multiMatrix(final_matrix[current_matrix], matDown, final_matrix[current_matrix^1]);
+	        matDown.B[0] = sensor_values[sensorValueIdx].value;
+	        multiMatrix(&final_matrix[current_matrix], &matDown, &final_matrix[current_matrix^1]);
         } else if (!strcmp(sensor_values[sensorValueIdx].key, "D")) {
-	        matRight[2][1] = sensor_values[sensorValueIdx].value;
-	        multiMatrix(final_matrix[current_matrix], matRight, final_matrix[current_matrix^1]);
+	        matRight.B[1] = sensor_values[sensorValueIdx].value;
+	        multiMatrix(&final_matrix[current_matrix], &matRight, &final_matrix[current_matrix^1]);
         } else if (!strcmp(sensor_values[sensorValueIdx].key, "CW") || !strcmp(sensor_values[sensorValueIdx].key, "CCW")) {
 	        int itr = sensor_values[sensorValueIdx].value;
 	        if (!strcmp(sensor_values[sensorValueIdx].key, "CCW"))
@@ -114,31 +129,37 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
 		        itr = itr + 4;
 //	        printf("Now %s, %d : %d\n", sensor_values[sensorValueIdx].key, sensor_values[sensorValueIdx].value, itr);
 	        if (itr != 0)
-	            multiMatrix(final_matrix[current_matrix], matRot[itr - 1], final_matrix[current_matrix^1]);
+	            multiMatrix(&final_matrix[current_matrix], &matRot[itr - 1], &final_matrix[current_matrix^1]);
 	        else current_matrix ^= 1;
         } else if (!strcmp(sensor_values[sensorValueIdx].key, "MX")) {
-	        multiMatrix(final_matrix[current_matrix], matFlipX, final_matrix[current_matrix^1]);
+	        multiMatrix(&final_matrix[current_matrix], &matFlipX, &final_matrix[current_matrix^1]);
         } else if (!strcmp(sensor_values[sensorValueIdx].key, "MY")) {
-	        multiMatrix(final_matrix[current_matrix], matFlipY, final_matrix[current_matrix^1]);
+	        multiMatrix(&final_matrix[current_matrix], &matFlipY, &final_matrix[current_matrix^1]);
         }
 	    current_matrix ^= 1;
         processed_frames += 1;
 //	    printf("%d\n", processed_frames);
         if (processed_frames % 25 == 0) {
-//			printf("Current matrix:\n\t%d %d %d\n\t%d %d %d\n\t%d %d %d\n",
-//			       final_matrix[current_matrix][0][0], final_matrix[current_matrix][0][1], final_matrix[current_matrix][0][2],
-//			       final_matrix[current_matrix][1][0], final_matrix[current_matrix][1][1], final_matrix[current_matrix][1][2],
-//			       final_matrix[current_matrix][2][0], final_matrix[current_matrix][2][1], final_matrix[current_matrix][2][2]);
+//	        printf("Process %d...\n", processed_frames);
 	        memset(render_buffer, 255, width * height * 3);
 	        for (int row = 0; row < height; ++row)
 		        for (int col = 0; col < width; ++col) {
 			        int pos = row * width * 3 + col * 3;
 			        if (!(frame_buffer[pos] == 255 && frame_buffer[pos + 1] == 255 && frame_buffer[pos + 2] == 255)) {
-				        int render_row = row * final_matrix[current_matrix][0][0] + col * final_matrix[current_matrix][1][0] + final_matrix[current_matrix][2][0];
-				        int render_col = row * final_matrix[current_matrix][0][1] + col * final_matrix[current_matrix][1][1] + final_matrix[current_matrix][2][1];
-//				        if (!(render_col >= 0 && render_col < width && render_row >= 0 && render_row < height) ) {
-//					        printf("(%d, %d) -> (%d, %d)", row, col, render_row, render_col);
-//				        }
+				        int render_row = final_matrix[current_matrix].B[0];
+				        int render_col = final_matrix[current_matrix].B[1];
+				        switch (final_matrix[current_matrix].typeA) {
+					        case 0: render_row += row; render_col += col; break;
+					        case 1: render_row += row; render_col -= col; break;
+					        case 2: render_row -= row; render_col += col; break;
+					        case 3: render_row -= row; render_col -= col; break;
+					        case 4: render_row += col; render_col += row; break;
+					        case 5: render_row += col; render_col -= row; break;
+					        case 6: render_row -= col; render_col += row; break;
+					        case 7: render_row -= col; render_col -= row; break;
+				        }
+//				        if (render_row < 0 || render_row >= height || render_col < 0 || render_col >=width)
+//					        printf("!!!(%d, %d)->(%d, %d)!!!\n", row, col, render_row, render_col);
 				        int render_pos = render_row * width * 3 + render_col * 3;
 				        render_buffer[render_pos] = frame_buffer[pos];
 				        render_buffer[render_pos + 1] = frame_buffer[pos + 1];
