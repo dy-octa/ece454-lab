@@ -186,8 +186,20 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
 		        }*/
 
 	        for (int j = 0; j < i; j++){
-	        	int render_row = testRow[j] * final_matrix[current_matrix][0][0] + testCol[j] * final_matrix[current_matrix][1][0] + final_matrix[current_matrix][2][0];
-	        	int render_col = testRow[j] * final_matrix[current_matrix][0][1] + testCol[j] * final_matrix[current_matrix][1][1] + final_matrix[current_matrix][2][1];
+		        int render_row = final_matrix[current_matrix].B[0];
+		        int render_col = final_matrix[current_matrix].B[1];
+		        switch (final_matrix[current_matrix].typeA) {
+			        case 0: render_row += testRow[j]; render_col += testCol[j]; break;
+			        case 1: render_row += testRow[j]; render_col -= testCol[j]; break;
+			        case 2: render_row -= testRow[j]; render_col += testCol[j]; break;
+			        case 3: render_row -= testRow[j]; render_col -= testCol[j]; break;
+			        case 4: render_row += testCol[j]; render_col += testRow[j]; break;
+			        case 5: render_row += testCol[j]; render_col -= testRow[j]; break;
+			        case 6: render_row -= testCol[j]; render_col += testRow[j]; break;
+			        case 7: render_row -= testCol[j]; render_col -= testRow[j]; break;
+		        }
+//				if (render_row < 0 || render_row >= height || render_col < 0 || render_col >=width)
+//		            printf("!!!(%d, %d)->(%d, %d)!!!\n", testRow[j], testCol[j], render_row, render_col);
 	        	int render_pos = render_row * width * 3 + render_col * 3;
 	        	render_buffer[render_pos] = frame_buffer[testArray[j]];
 	        	render_buffer[render_pos + 1] = frame_buffer[testArray[j] + 1];
