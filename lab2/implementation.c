@@ -58,16 +58,18 @@ char typeAMuls[] = {0, 1, 2, 3, 4, 5, 6, 7, 1, 0, 3, 2, 6, 7, 4, 5, 2, 3, 0, 1, 
                     5, 6, 7, 0, 1, 2, 3, 5, 4, 7, 6, 2, 3, 0, 1, 6, 7, 4, 5, 1, 0, 3, 2, 7, 6, 5, 4, 3, 2, 1, 0};
 void multiMatrix(Matrix* A, Matrix* B, Matrix* C){
 	C->typeA = typeAMuls[((short)(A->typeA))<<3 | ((short)(B->typeA))];
-	switch (B->typeA) {
-		case 0: C->B[0] = A->B[0]; C->B[1] = A->B[1];break;
-		case 1: C->B[0] = A->B[0]; C->B[1] = -A->B[1];break;
-		case 2: C->B[0] = -A->B[0]; C->B[1] = A->B[1];break;
-		case 3: C->B[0] = -A->B[0]; C->B[1] = -A->B[1];break;
-		case 4: C->B[0] = A->B[1]; C->B[1] = A->B[0];break;
-		case 5: C->B[0] = A->B[1]; C->B[1] = -A->B[0];break;
-		case 6: C->B[0] = -A->B[1]; C->B[1] = A->B[0];break;
-		case 7: C->B[0] = -A->B[1]; C->B[1] = -A->B[0];break;
+	if ((B->typeA >> 2) & 1) {
+		C->B[0] = A->B[1];
+		C->B[1] = A->B[0];
 	}
+	else {
+		C->B[0] = A->B[0];
+		C->B[1] = A->B[1];
+	}
+	if (B->typeA & 1)
+		C->B[1] = -C->B[1];
+	if ((B->typeA >> 1) & 1)
+		C->B[0] = -C->B[0];
 	C->B[0] += B->B[0];
 	C->B[1] += B->B[1];
 	return;
@@ -107,14 +109,14 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
 	int current_matrix = 0;
 
 	//int testArray[10669];
-	int * testArray = malloc (20000 * sizeof(int));
+	int * testArray = malloc (300000 * sizeof(int));
 	//int testRow[10669];
-	int * testRow = malloc (20000 * sizeof(int));
+	int * testRow = malloc (300000 * sizeof(int));
 	//int testCol[10669];
-	int * testCol = malloc (20000 * sizeof(int));
-	int i = 0;
+	int * testCol = malloc (300000 * sizeof(int));
+	int nPix = 0;
 	int pos = 0;
-	int resizeFlag = 10550;
+	int resizeFlag = 300000;
 
 	/*unsigned char * buffer = (unsigned char *) malloc(sizeof(16 * sizeof(unsigned char))); //{ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 	buffer[0] = 255;
@@ -164,11 +166,11 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
 			 int posTest = pos + col * 3;
 			if(!((((unsigned int *) &frame_buffer[posTest])[0] & 0xFFFFFF) == 16777215)){
 
-			 testArray[i] = posTest;
-			 testRow[i] = row;
-			 testCol[i] = col;
-			 i++;
-				if(i == resizeFlag ){
+			 testArray[nPix] = posTest;
+			 testRow[nPix] = row;
+			 testCol[nPix] = col;
+			 nPix++;
+				if(nPix == resizeFlag ){
 					resizeFlag = resizeFlag * 2;
 					testArray = realloc(testArray, resizeFlag * sizeof (int));
 					testRow = realloc(testRow, resizeFlag * sizeof (int));
@@ -200,7 +202,6 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
 	        itr %= 4;
 	        if (itr < 0)
 		        itr = itr + 4;
-//	        printf("Now %s, %d : %d\n", sensor_values[sensorValueIdx].key, sensor_values[sensorValueIdx].value, itr);
 	        if (itr != 0)
 	            multiMatrix(&final_matrix[current_matrix], &matRot[itr - 1], &final_matrix[current_matrix^1]);
 	        else current_matrix ^= 1;
@@ -215,44 +216,22 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
         if (processed_frames % 25 == 0) {
 //	        printf("Process %d...\n", processed_frames);
 	        memset(render_buffer, 255, width * height * 3);
-	        /*for (int row = 0; row < height; ++row)
-		        for (int col = 0; col < width; ++col) {
-			        int pos = row * width * 3 + col * 3;
-			        if (!(frame_buffer[pos] == 255 && frame_buffer[pos + 1] == 255 && frame_buffer[pos + 2] == 255)) {
-				        int render_row = final_matrix[current_matrix].B[0];
-				        int render_col = final_matrix[current_matrix].B[1];
-				        switch (final_matrix[current_matrix].typeA) {
-					        case 0: render_row += row; render_col += col; break;
-					        case 1: render_row += row; render_col -= col; break;
-					        case 2: render_row -= row; render_col += col; break;
-					        case 3: render_row -= row; render_col -= col; break;
-					        case 4: render_row += col; render_col += row; break;
-					        case 5: render_row += col; render_col -= row; break;
-					        case 6: render_row -= col; render_col += row; break;
-					        case 7: render_row -= col; render_col -= row; break;
-				        }
-//				        if (render_row < 0 || render_row >= height || render_col < 0 || render_col >=width)
-//					        printf("!!!(%d, %d)->(%d, %d)!!!\n", row, col, render_row, render_col);
-				        int render_pos = render_row * width * 3 + render_col * 3;
-				        render_buffer[render_pos] = frame_buffer[pos];
-				        render_buffer[render_pos + 1] = frame_buffer[pos + 1];
-				        render_buffer[render_pos + 2] = frame_buffer[pos + 2];
-			        }
-		        }*/
-
-	        for (int j = 0; j < i; j++){
-		        int render_row = final_matrix[current_matrix].B[0];
-		        int render_col = final_matrix[current_matrix].B[1];
-		        switch (final_matrix[current_matrix].typeA) {
-			        case 0: render_row += testRow[j]; render_col += testCol[j]; break;
-			        case 1: render_row += testRow[j]; render_col -= testCol[j]; break;
-			        case 2: render_row -= testRow[j]; render_col += testCol[j]; break;
-			        case 3: render_row -= testRow[j]; render_col -= testCol[j]; break;
-			        case 4: render_row += testCol[j]; render_col += testRow[j]; break;
-			        case 5: render_row += testCol[j]; render_col -= testRow[j]; break;
-			        case 6: render_row -= testCol[j]; render_col += testRow[j]; break;
-			        case 7: render_row -= testCol[j]; render_col -= testRow[j]; break;
+	        for (int j = 0; j < nPix; j++){
+		        int render_row, render_col, typeA = final_matrix[current_matrix].typeA;
+		        if ((typeA >> 2) & 1) {
+			        render_row = testCol[j];
+			        render_col = testRow[j];
 		        }
+		        else {
+			        render_row = testRow[j];
+			        render_col = testCol[j];
+		        }
+		        if (typeA & 1)
+			        render_col = -render_col;
+		        if ((typeA >> 1) & 1)
+			        render_row = -render_row;
+		        render_row += final_matrix[current_matrix].B[0];
+		        render_col += final_matrix[current_matrix].B[1];
 //				if (render_row < 0 || render_row >= height || render_col < 0 || render_col >=width)
 //		            printf("!!!(%d, %d)->(%d, %d)!!!\n", testRow[j], testCol[j], render_row, render_col);
 	        	int render_pos = render_row * width * 3 + render_col * 3;
@@ -262,15 +241,10 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
 
 	        }
             verifyFrame(render_buffer, width, height, grading_mode);
-//	        printf("%d finished\n", processed_frames);
 
 //	        char filename[100];
 //	        sprintf(filename, "%dimp.bmp", processed_frames);
 //	        writeBMP(width, height, render_buffer, filename);
-
-//	        final_matrix[current_matrix][0][0] = 1, final_matrix[current_matrix][0][1] = 0, final_matrix[current_matrix][0][2] =0;
-//	        final_matrix[current_matrix][1][0] = 0, final_matrix[current_matrix][1][1] = 1, final_matrix[current_matrix][1][2] =0;
-//	        final_matrix[current_matrix][2][0] = 0, final_matrix[current_matrix][2][1] = 0, final_matrix[current_matrix][2][2] =1;
         }
     }
 	free (testArray);
