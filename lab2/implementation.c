@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <stdbool.h>
+#include <math.h>
 #include "utilities.h"  // DO NOT REMOVE this line
 #include "implementation_reference.h"   // DO NOT REMOVE this line
 
@@ -104,24 +106,77 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
 	Matrix matFlipY = {1, 0, width - 1}; //{{1, 0, 0}, {0, -1, 0}, {0, width - 1, 1}};
 	int current_matrix = 0;
 
-	int testArray[10669];
-	int testRow[10669];
-	int testCol[10669];
+	//int testArray[10669];
+	int * testArray = malloc (20000 * sizeof(int));
+	//int testRow[10669];
+	int * testRow = malloc (20000 * sizeof(int));
+	//int testCol[10669];
+	int * testCol = malloc (20000 * sizeof(int));
 	int i = 0;
+	int pos = 0;
+	int resizeFlag = 10550;
+
+	/*unsigned char * buffer = (unsigned char *) malloc(sizeof(16 * sizeof(unsigned char))); //{ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+	buffer[0] = 255;
+	buffer[1] = 255;
+	buffer[2] = 255;
+	buffer[3] = 255;
+	buffer[4] = 255;
+	buffer[5] = 255;
+	buffer[6] = 255;
+	buffer[7] = 255;
+	buffer[8] = 255;
+	buffer[9] = 0;
+	buffer[10] = 0;
+	buffer[11] = 0;
+	buffer[12] = 0x0;
+	buffer[13] = 0x0;
+	buffer[14] = 0x0;
+	buffer[15] = 0x0;
+*/
+
+	//unsigned long long * tester = (unsigned long long *) frame_buffer;
+
+			//printf("TESTING TESTER1: %llu\n", *tester);
+			//printf("TESTING TESTER: %llu\n", *tester & 0xFFFFFF);
+			//printf("TESTING BUFFER: %d\n", (width * height)/8);
+
+    //printf("what is width*height: %d, %d, %d\n", width*height, width*height*3, (width*height*3)/8);
+
+	/*for (int f = 0; f < ((width*height*3)/8); f++){	//(/6 has equal iterations to normal loop)
+		//printf("TESTING TESTER: %llu\n", tester[0]);
+		//printf("TESTING TESTER2: %llu\n", tester[1] & 0xff);
+		if(tester[f] != 18446744073709551615){
+			printf("TESTING TESTER: %llu\n", tester[f]);
+			printf("TESTING TESTER2: %llu\n", tester[f+1] & 0xff);
+		}
+	}*/
+
+    //char filename[100];
+    //sprintf(filename, "%dimp.bmp", processed_frames);
+    //writeBMP(width, height, render_buffer, filename);
+
+	//unsigned long * tester = (unsigned long *) &frame_buffer[0];
+
 	for (int row = 0; row < height; ++row){
+		pos = row * width * 3;
 		for (int col = 0; col < width; ++col) {
-			int pos = row * width * 3 + col * 3;
-			if (!(frame_buffer[pos] == 255 && frame_buffer[pos + 1] == 255 && frame_buffer[pos + 2] == 255)) {
-			 //printf("what is i: %d\n", i);
-			 testArray[i] = row * width * 3 + col * 3;
+			 int posTest = pos + col * 3;
+			if(!((((unsigned int *) &frame_buffer[posTest])[0] & 0xFFFFFF) == 16777215)){
+
+			 testArray[i] = posTest;
 			 testRow[i] = row;
 			 testCol[i] = col;
 			 i++;
+				if(i == resizeFlag ){
+					resizeFlag = resizeFlag * 2;
+					testArray = realloc(testArray, resizeFlag * sizeof (int));
+					testRow = realloc(testRow, resizeFlag * sizeof (int));
+					testCol = realloc(testCol, resizeFlag * sizeof (int));
+				}
 			}
-
 		}
 	}
-
 
 	unsigned char* render_buffer = allocateFrame(width, height);
 
@@ -218,6 +273,9 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
 //	        final_matrix[current_matrix][2][0] = 0, final_matrix[current_matrix][2][1] = 0, final_matrix[current_matrix][2][2] =1;
         }
     }
+	free (testArray);
+	free (testRow);
+	free (testCol);
 	deallocateFrame(render_buffer);
     return;
 }
