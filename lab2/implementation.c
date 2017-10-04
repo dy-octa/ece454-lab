@@ -52,14 +52,14 @@ void print_team_info() {
  *
  **********************************************************************************************************************/
 typedef struct {
-	char typeA;
+	int typeA;
 	int B[2];
 } Matrix;
 char typeAMuls[] = {0, 1, 2, 3, 4, 5, 6, 7, 1, 0, 3, 2, 6, 7, 4, 5, 2, 3, 0, 1, 5, 4, 7, 6, 3, 2, 1, 0, 7, 6, 5, 4, 4,
                     5, 6, 7, 0, 1, 2, 3, 5, 4, 7, 6, 2, 3, 0, 1, 6, 7, 4, 5, 1, 0, 3, 2, 7, 6, 5, 4, 3, 2, 1, 0};
 
 void multiMatrix(Matrix *A, Matrix *B, Matrix *C) {
-	C->typeA = typeAMuls[((short)(A->typeA))<<3 | ((short)(B->typeA))];
+	C->typeA = typeAMuls[(A->typeA)<<3 | (B->typeA)];
 	if ((B->typeA >> 2) & 1) {
 		C->B[0] = A->B[1];
 		C->B[1] = A->B[0];
@@ -93,6 +93,10 @@ void multiMatrix(Matrix *A, Matrix *B, Matrix *C) {
 //{0 -1; 1 0}
 //{0 1; -1 0}
 //{0 -1; -1 0}
+int testArray[300000];
+int testRow[300000];
+int testCol[300000];
+int renderedPos[300000];
 void implementation_driver(struct kv *sensor_values, int sensor_values_count, unsigned char *frame_buffer,
                            unsigned int width, unsigned int height, bool grading_mode) {
 	int processed_frames = 0;
@@ -113,47 +117,132 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
 	int current_matrix = 0;
 
 	//int testArray[10669];
-	int *testArray = malloc(300000 * sizeof(int));
 	//int testRow[10669];
-	int *testRow = malloc(300000 * sizeof(int));
 	//int testCol[10669];
-	int *testCol = malloc(300000 * sizeof(int));
 	int i = 0;
-	int pos = 0;
 	int resizeFlag = 299000;
+	int width_3 = width * 3;
 
+	int pos, row, col, size = height * width_3;
+	for (pos = row = col = 0; pos < size - 24;) {
+		if ((((unsigned int *) &frame_buffer[pos])[0] & 0xFFFFFF) != 16777215) {
+			testArray[i] = pos;
+			testRow[i] = row;
+			testCol[i] = col;
+			i++;
+		}
+		if (++col == width) {
+			col = 0;
+			++row;
+		}
+		pos += 3;
 
-	for (int row = 0; row < height; ++row) {
-		pos = row * width * 3;
-		for (int col = 0; col < width; ++col) {
-			int posTest = pos + col * 3;
-			if ((((unsigned int *) &frame_buffer[posTest])[0] & 0xFFFFFF) != 16777215) {
-				//if(frame_buffer[posTest] != 255 && frame_buffer[posTest + 1] != 255 && frame_buffer[posTest+2] != 255){
-				//if (!(frame_buffer[posTest] == 255 && frame_buffer[posTest + 1] == 255 && frame_buffer[posTest + 2] == 255)) {
-				testArray[i] = posTest;
-				testRow[i] = row;
-				testCol[i] = col;
-				i++;
-				if (i == resizeFlag) {
-					resizeFlag = resizeFlag * 2;
-					testArray = realloc(testArray, resizeFlag * sizeof(int));
-					testRow = realloc(testRow, resizeFlag * sizeof(int));
-					testCol = realloc(testCol, resizeFlag * sizeof(int));
-				}
-			}
+		if ((((unsigned int *) &frame_buffer[pos])[0] & 0xFFFFFF) != 16777215) {
+			testArray[i] = pos;
+			testRow[i] = row;
+			testCol[i] = col;
+			i++;
+		}
+		if (++col == width) {
+			col = 0;
+			++row;
+		}
+		pos += 3;
+
+		if ((((unsigned int *) &frame_buffer[pos])[0] & 0xFFFFFF) != 16777215) {
+			testArray[i] = pos;
+			testRow[i] = row;
+			testCol[i] = col;
+			i++;
+		}
+		if (++col == width) {
+			col = 0;
+			++row;
+		}
+		pos += 3;
+
+		if ((((unsigned int *) &frame_buffer[pos])[0] & 0xFFFFFF) != 16777215) {
+			testArray[i] = pos;
+			testRow[i] = row;
+			testCol[i] = col;
+			i++;
+		}
+		if (++col == width) {
+			col = 0;
+			++row;
+		}
+		pos += 3;
+
+		if ((((unsigned int *) &frame_buffer[pos])[0] & 0xFFFFFF) != 16777215) {
+			testArray[i] = pos;
+			testRow[i] = row;
+			testCol[i] = col;
+			i++;
+		}
+		if (++col == width) {
+			col = 0;
+			++row;
+		}
+		pos += 3;
+
+		if ((((unsigned int *) &frame_buffer[pos])[0] & 0xFFFFFF) != 16777215) {
+			testArray[i] = pos;
+			testRow[i] = row;
+			testCol[i] = col;
+			i++;
+		}
+		if (++col == width) {
+			col = 0;
+			++row;
+		}
+		pos += 3;
+
+		if ((((unsigned int *) &frame_buffer[pos])[0] & 0xFFFFFF) != 16777215) {
+			testArray[i] = pos;
+			testRow[i] = row;
+			testCol[i] = col;
+			i++;
+		}
+		if (++col == width) {
+			col = 0;
+			++row;
+		}
+		pos += 3;
+
+		if ((((unsigned int *) &frame_buffer[pos])[0] & 0xFFFFFF) != 16777215) {
+			testArray[i] = pos;
+			testRow[i] = row;
+			testCol[i] = col;
+			i++;
+		}
+		if (++col == width) {
+			col = 0;
+			++row;
+		}
+		pos += 3;
+	}
+
+	for (; pos < size; pos += 3) {
+		if ((((unsigned int *) &frame_buffer[pos])[0] & 0xFFFFFF) != 16777215) {
+			testArray[i] = pos;
+			testRow[i] = row;
+			testCol[i] = col;
+			i++;
+		}
+		if (++col == width) {
+			col = 0;
+			++row;
 		}
 	}
 
 	unsigned char *render_buffer = allocateFrame(width, height);
+	memset(render_buffer, 255, width_3 * height);
+//	int width_3 = width * 3;
 
 	for (int sensorValueIdx = 0; sensorValueIdx < sensor_values_count; sensorValueIdx++) {
-
 		int multi_instr = 0;
-
 		if (!strcmp(sensor_values[sensorValueIdx].key, "W")) {
 			multi_instr = sensor_values[sensorValueIdx].value;
-
-
 			while (sensorValueIdx + 1 < sensor_values_count && !strcmp(sensor_values[sensorValueIdx + 1].key, "W") &&
 			       (processed_frames + 1) % 25 != 0) {
 
@@ -161,7 +250,6 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
 				sensorValueIdx++;
 				processed_frames++;
 			}
-
 			//matUp.B[0] = - sensor_values[sensorValueIdx].value;
 			matUp.B[0] = -multi_instr;
 			multiMatrix(&final_matrix[current_matrix], &matUp, &final_matrix[current_matrix ^ 1]);
@@ -174,7 +262,6 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
 				sensorValueIdx++;
 				processed_frames++;
 			}
-
 			//matLeft.B[1] = - sensor_values[sensorValueIdx].value;
 			matLeft.B[1] = -multi_instr;
 			multiMatrix(&final_matrix[current_matrix], &matLeft, &final_matrix[current_matrix ^ 1]);
@@ -187,7 +274,6 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
 				sensorValueIdx++;
 				processed_frames++;
 			}
-
 			//matDown.B[0] = sensor_values[sensorValueIdx].value;
 			matDown.B[0] = multi_instr;
 			multiMatrix(&final_matrix[current_matrix], &matDown, &final_matrix[current_matrix ^ 1]);
@@ -221,40 +307,61 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
 		}
 		current_matrix ^= 1;
 		processed_frames += 1;
-//	    printf("%d\n", processed_frames);
 		if (processed_frames % 25 == 0) {
-//	        printf("Process %d...\n", processed_frames);
-			memset(render_buffer, 255, width * height * 3);
+			int *baseRow, *baseCol;
+			int typeA = final_matrix[current_matrix].typeA;
+			if ((typeA >> 2) & 1) {
+				baseRow = testCol;
+				baseCol = testRow;
+			}
+			else {
+				baseRow = testRow;
+				baseCol = testCol;
+			}
 			for (int j = 0; j < i; j++) {
-				int render_row, render_col, typeA = final_matrix[current_matrix].typeA;
-				int row = testRow[j], col = testCol[j];
-				if ((typeA >> 2) & 1) {
-					render_row = col;
-					render_col = row;
-				}
-				else {
-					render_row = row;
-					render_col = col;
-				}
+				int render_row = baseRow[j];
+				int render_col = baseCol[j];
 				if (typeA & 1)
 					render_col = -render_col;
 				if ((typeA >> 1) & 1)
 					render_row = -render_row;
 				render_row += final_matrix[current_matrix].B[0];
 				render_col += final_matrix[current_matrix].B[1];
-
-				int render_pos = render_row * width * 3 + render_col * 3;
+				int render_pos = render_row * width_3 + render_col * 3;
+				renderedPos[j] = render_pos;
 				render_buffer[render_pos] = frame_buffer[testArray[j]];
 				render_buffer[render_pos + 1] = frame_buffer[testArray[j] + 1];
 				render_buffer[render_pos + 2] = frame_buffer[testArray[j] + 2];
-
 			}
 			verifyFrame(render_buffer, width, height, grading_mode);
+			int *j;
+			for (j = renderedPos; j < renderedPos + i - 4;) {
+				render_buffer[*j] = 255;
+				render_buffer[(*j) + 1] = 255;
+				render_buffer[(*j) + 2] = 255;
+				++j;
+
+				render_buffer[*j] = 255;
+				render_buffer[(*j) + 1] = 255;
+				render_buffer[(*j) + 2] = 255;
+				++j;
+
+				render_buffer[*j] = 255;
+				render_buffer[(*j) + 1] = 255;
+				render_buffer[(*j) + 2] = 255;
+				++j;
+
+				render_buffer[*j] = 255;
+				render_buffer[(*j) + 1] = 255;
+				render_buffer[(*j) + 2] = 255;
+				++j;
+			}
+			for (; j < renderedPos + i; ++j) {
+				render_buffer[*j] = 255;
+				render_buffer[(*j) + 1] = 255;
+				render_buffer[(*j) + 2] = 255;
+			}
 		}
 	}
-	free(testArray);
-	free(testRow);
-	free(testCol);
 	deallocateFrame(render_buffer);
-	return;
 }
