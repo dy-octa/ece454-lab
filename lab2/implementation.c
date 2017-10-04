@@ -59,44 +59,21 @@ char typeAMuls[] = {0, 1, 2, 3, 4, 5, 6, 7, 1, 0, 3, 2, 6, 7, 4, 5, 2, 3, 0, 1, 
                     5, 6, 7, 0, 1, 2, 3, 5, 4, 7, 6, 2, 3, 0, 1, 6, 7, 4, 5, 1, 0, 3, 2, 7, 6, 5, 4, 3, 2, 1, 0};
 
 void multiMatrix(Matrix *A, Matrix *B, Matrix *C) {
-	C->typeA = typeAMuls[((short) (A->typeA)) << 3 | ((short) (B->typeA))];
-	switch (B->typeA) {
-		case 0:
-			C->B[0] = A->B[0];
-			C->B[1] = A->B[1];
-			break;
-		case 1:
-			C->B[0] = A->B[0];
-			C->B[1] = -A->B[1];
-			break;
-		case 2:
-			C->B[0] = -A->B[0];
-			C->B[1] = A->B[1];
-			break;
-		case 3:
-			C->B[0] = -A->B[0];
-			C->B[1] = -A->B[1];
-			break;
-		case 4:
-			C->B[0] = A->B[1];
-			C->B[1] = A->B[0];
-			break;
-		case 5:
-			C->B[0] = A->B[1];
-			C->B[1] = -A->B[0];
-			break;
-		case 6:
-			C->B[0] = -A->B[1];
-			C->B[1] = A->B[0];
-			break;
-		case 7:
-			C->B[0] = -A->B[1];
-			C->B[1] = -A->B[0];
-			break;
+	C->typeA = typeAMuls[((short)(A->typeA))<<3 | ((short)(B->typeA))];
+	if ((B->typeA >> 2) & 1) {
+		C->B[0] = A->B[1];
+		C->B[1] = A->B[0];
 	}
+	else {
+		C->B[0] = A->B[0];
+		C->B[1] = A->B[1];
+	}
+	if (B->typeA & 1)
+		C->B[1] = -C->B[1];
+	if ((B->typeA >> 1) & 1)
+		C->B[0] = -C->B[0];
 	C->B[0] += B->B[0];
 	C->B[1] += B->B[1];
-	return;
 }
 /*
  * All the transformation matrices can be represented as a 3*3 matrix M = [A 0; B 1], where A is a 2*2 matrix and B is a
@@ -223,7 +200,6 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
 				sensorValueIdx++;
 				processed_frames++;
 			}
-
 			//matRight.B[1] = sensor_values[sensorValueIdx].value;
 			matRight.B[1] = multi_instr;
 			multiMatrix(&final_matrix[current_matrix], &matRight, &final_matrix[current_matrix ^ 1]);
@@ -249,60 +225,31 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
 		if (processed_frames % 25 == 0) {
 //	        printf("Process %d...\n", processed_frames);
 			memset(render_buffer, 255, width * height * 3);
-
 			for (int j = 0; j < i; j++) {
-				int render_row = final_matrix[current_matrix].B[0];
-				int render_col = final_matrix[current_matrix].B[1];
-				switch (final_matrix[current_matrix].typeA) {
-					case 0:
-						render_row += testRow[j];
-						render_col += testCol[j];
-						break;
-					case 1:
-						render_row += testRow[j];
-						render_col -= testCol[j];
-						break;
-					case 2:
-						render_row -= testRow[j];
-						render_col += testCol[j];
-						break;
-					case 3:
-						render_row -= testRow[j];
-						render_col -= testCol[j];
-						break;
-					case 4:
-						render_row += testCol[j];
-						render_col += testRow[j];
-						break;
-					case 5:
-						render_row += testCol[j];
-						render_col -= testRow[j];
-						break;
-					case 6:
-						render_row -= testCol[j];
-						render_col += testRow[j];
-						break;
-					case 7:
-						render_row -= testCol[j];
-						render_col -= testRow[j];
-						break;
+				int render_row, render_col, typeA = final_matrix[current_matrix].typeA;
+				int row = testRow[j], col = testCol[j];
+				if ((typeA >> 2) & 1) {
+					render_row = col;
+					render_col = row;
 				}
-
+				else {
+					render_row = row;
+					render_col = col;
+				}
+				if (typeA & 1)
+					render_col = -render_col;
+				if ((typeA >> 1) & 1)
+					render_row = -render_row;
+				render_row += final_matrix[current_matrix].B[0];
+				render_col += final_matrix[current_matrix].B[1];
 
 				int render_pos = render_row * width * 3 + render_col * 3;
-				//assert(render_row => 0 && render_row <= height);//testing failed
-				//assert(render_col => 0 && render_col <= width);//testing failed
-				//assert(render_pos => 0 && render_pos <= width*height*3);//testing failed
-				//printf("render pos is: %d\n", render_pos);
-				//if(render_pos > 0 && render_pos < height*width*3){
 				render_buffer[render_pos] = frame_buffer[testArray[j]];
 				render_buffer[render_pos + 1] = frame_buffer[testArray[j] + 1];
 				render_buffer[render_pos + 2] = frame_buffer[testArray[j] + 2];
-				//}
 
 			}
 			verifyFrame(render_buffer, width, height, grading_mode);
-
 		}
 	}
 	free(testArray);
