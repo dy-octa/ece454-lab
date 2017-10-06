@@ -6,6 +6,8 @@
 #include <assert.h>
 #include "utilities.h"  // DO NOT REMOVE this line
 #include "implementation_reference.h"   // DO NOT REMOVE this line
+#define UNROLL8(S) {{S};{S};{S};{S};{S};{S};{S};{S};}
+#define UNROLL4(S) {{S};{S};{S};{S};}
 
 /***********************************************************************************************************************
  * WARNING: Do not modify the implementation_driver and team info prototype (name, parameter, return value) !!!
@@ -93,9 +95,9 @@ void multiMatrix(Matrix *A, Matrix *B, Matrix *C) {
 //{0 -1; 1 0}
 //{0 1; -1 0}
 //{0 -1; -1 0}
-int testArray[300000];
 int testRow[300000];
 int testCol[300000];
+int testPixel[300000];
 int renderedPos[300000];
 void implementation_driver(struct kv *sensor_values, int sensor_values_count, unsigned char *frame_buffer,
                            unsigned int width, unsigned int height, bool grading_mode) {
@@ -125,8 +127,9 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
 
 	int pos, row, col, size = height * width_3;
 	for (pos = row = col = 0; pos < size - 24;) {
+		UNROLL8(
 		if ((((unsigned int *) &frame_buffer[pos])[0] & 0xFFFFFF) != 16777215) {
-			testArray[i] = pos;
+			testPixel[i] = (((unsigned int *) &frame_buffer[pos])[0] & 0xFFFFFF) | (0xFF000000);
 			testRow[i] = row;
 			testCol[i] = col;
 			i++;
@@ -136,95 +139,12 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
 			++row;
 		}
 		pos += 3;
-
-		if ((((unsigned int *) &frame_buffer[pos])[0] & 0xFFFFFF) != 16777215) {
-			testArray[i] = pos;
-			testRow[i] = row;
-			testCol[i] = col;
-			i++;
-		}
-		if (++col == width) {
-			col = 0;
-			++row;
-		}
-		pos += 3;
-
-		if ((((unsigned int *) &frame_buffer[pos])[0] & 0xFFFFFF) != 16777215) {
-			testArray[i] = pos;
-			testRow[i] = row;
-			testCol[i] = col;
-			i++;
-		}
-		if (++col == width) {
-			col = 0;
-			++row;
-		}
-		pos += 3;
-
-		if ((((unsigned int *) &frame_buffer[pos])[0] & 0xFFFFFF) != 16777215) {
-			testArray[i] = pos;
-			testRow[i] = row;
-			testCol[i] = col;
-			i++;
-		}
-		if (++col == width) {
-			col = 0;
-			++row;
-		}
-		pos += 3;
-
-		if ((((unsigned int *) &frame_buffer[pos])[0] & 0xFFFFFF) != 16777215) {
-			testArray[i] = pos;
-			testRow[i] = row;
-			testCol[i] = col;
-			i++;
-		}
-		if (++col == width) {
-			col = 0;
-			++row;
-		}
-		pos += 3;
-
-		if ((((unsigned int *) &frame_buffer[pos])[0] & 0xFFFFFF) != 16777215) {
-			testArray[i] = pos;
-			testRow[i] = row;
-			testCol[i] = col;
-			i++;
-		}
-		if (++col == width) {
-			col = 0;
-			++row;
-		}
-		pos += 3;
-
-		if ((((unsigned int *) &frame_buffer[pos])[0] & 0xFFFFFF) != 16777215) {
-			testArray[i] = pos;
-			testRow[i] = row;
-			testCol[i] = col;
-			i++;
-		}
-		if (++col == width) {
-			col = 0;
-			++row;
-		}
-		pos += 3;
-
-		if ((((unsigned int *) &frame_buffer[pos])[0] & 0xFFFFFF) != 16777215) {
-			testArray[i] = pos;
-			testRow[i] = row;
-			testCol[i] = col;
-			i++;
-		}
-		if (++col == width) {
-			col = 0;
-			++row;
-		}
-		pos += 3;
+		);
 	}
 
 	for (; pos < size; pos += 3) {
 		if ((((unsigned int *) &frame_buffer[pos])[0] & 0xFFFFFF) != 16777215) {
-			testArray[i] = pos;
+			testPixel[i] = (((unsigned int *) &frame_buffer[pos])[0] & 0xFFFFFF) | (0xFF0000);
 			testRow[i] = row;
 			testCol[i] = col;
 			i++;
@@ -235,9 +155,8 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
 		}
 	}
 
-	unsigned char *render_buffer = allocateFrame(width, height);
+	unsigned char *render_buffer = (unsigned char*)malloc((width * height * 3 + 4) * sizeof(char));
 	memset(render_buffer, 255, width_3 * height);
-//	int width_3 = width * 3;
 
 	for (int sensorValueIdx = 0; sensorValueIdx < sensor_values_count; sensorValueIdx++) {
 		int multi_instr = 0;
@@ -329,39 +248,21 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
 				render_col += final_matrix[current_matrix].B[1];
 				int render_pos = render_row * width_3 + render_col * 3;
 				renderedPos[j] = render_pos;
-				render_buffer[render_pos] = frame_buffer[testArray[j]];
-				render_buffer[render_pos + 1] = frame_buffer[testArray[j] + 1];
-				render_buffer[render_pos + 2] = frame_buffer[testArray[j] + 2];
+				*((unsigned int *) (render_buffer + render_pos)) &= testPixel[j];
 			}
 			verifyFrame(render_buffer, width, height, grading_mode);
+//			char filename[100];
+//			sprintf(filename, "%dimp.bmp", processed_frames);
+//			writeBMP(width, height, render_buffer, filename);
 			int *j;
 			for (j = renderedPos; j < renderedPos + i - 4;) {
-				render_buffer[*j] = 255;
-				render_buffer[(*j) + 1] = 255;
-				render_buffer[(*j) + 2] = 255;
-				++j;
-
-				render_buffer[*j] = 255;
-				render_buffer[(*j) + 1] = 255;
-				render_buffer[(*j) + 2] = 255;
-				++j;
-
-				render_buffer[*j] = 255;
-				render_buffer[(*j) + 1] = 255;
-				render_buffer[(*j) + 2] = 255;
-				++j;
-
-				render_buffer[*j] = 255;
-				render_buffer[(*j) + 1] = 255;
-				render_buffer[(*j) + 2] = 255;
-				++j;
+				UNROLL4(*((unsigned int *) (render_buffer + (*j))) |= 0xffffffff;
+				++j;);
 			}
 			for (; j < renderedPos + i; ++j) {
-				render_buffer[*j] = 255;
-				render_buffer[(*j) + 1] = 255;
-				render_buffer[(*j) + 2] = 255;
+				*((unsigned int *) (render_buffer + (*j))) |= 0xffffffff;
 			}
 		}
 	}
-	deallocateFrame(render_buffer);
+	free(render_buffer);
 }
