@@ -70,6 +70,7 @@ int main(int argc, char **argv) {
     int sensor_values_count = 0;
     struct kv sensor_values[10240];
     bool grading_mode = false;
+    bool timing_flag = false;
 
     /*******************************************************************************************************************
      * Commandline options parsing script:
@@ -101,7 +102,7 @@ int main(int argc, char **argv) {
      ******************************************************************************************************************/
     int fflag = 0, cflag = 0, iflag = 0, rflag = 0, option;
 
-    while ((option = getopt(argc, argv, "c:f:i:rg")) != -1)
+    while ((option = getopt(argc, argv, "t:c:f:i:rg")) != -1)
         switch (option) {
             case 'c':   // import sensor log from console argument input
                 if (fflag == 1) {
@@ -169,11 +170,14 @@ int main(int argc, char **argv) {
                 if (optopt == 'f' || optopt == 'c' || optopt == 'i') {
                     fprintf(stderr, "Option -%c requires an argument.\n", optopt);
                     return (-1);
-                } else if (isprint (optopt))
+                } else if (isprint(optopt))
                     fprintf(stderr, "Unknown option `-%c'.\n", optopt);
                 else
                     fprintf(stderr, "Unknown option character `\\x%x'.\n", optopt);
                 return 1;
+            case 't':
+                timing_flag = true;
+                break;
             default:
                 abort();
         }
@@ -202,22 +206,22 @@ int main(int argc, char **argv) {
 
         // save compiler switches to disable pointer casting compilation warnings
         // this part of the code is only needed to maintain instrumentation compatibility
-        #pragma GCC diagnostic push
-        #pragma GCC diagnostic ignored "-Wint-to-pointer-cast"
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wint-to-pointer-cast"
 
         // start instrumentation
         // Prepare array of parameter input
         void *arglist[6];
         bool boolVar = true;
-        arglist[0] = (void *)sensor_values;
-        arglist[1] = (void *)sensor_values_count;
-        arglist[2] = (void *)frame_copy;
-        arglist[3] = (void *)width;
-        arglist[4] = (void *)height;
-        arglist[5] = (void *)boolVar;
+        arglist[0] = (void *) sensor_values;
+        arglist[1] = (void *) sensor_values_count;
+        arglist[2] = (void *) frame_copy;
+        arglist[3] = (void *) width;
+        arglist[4] = (void *) height;
+        arglist[5] = (void *) boolVar;
 
         // restore compiler switches
-        #pragma GCC diagnostic pop
+#pragma GCC diagnostic pop
 
         // Provide fresh copy of input frame buffer
         copyFrame(frame_buffer, frame_copy, width, height);
@@ -226,7 +230,7 @@ int main(int argc, char **argv) {
         set_fcyc_clear_cache(1);        // clear the cache before each measurement
         set_fcyc_compensate(1);         // try to compensate for timer overhead
 
-        double num_cycles_reference = fcyc_v((test_funct_v)&implementation_driver_reference_wraper, arglist);
+        double num_cycles_reference = fcyc_v((test_funct_v) &implementation_driver_reference_wraper, arglist);
         printf("\tNumber of cpu cycles consumed by the reference implementation: %.0f\n", num_cycles_reference);
 
         // Provide fresh copy of input frame buffer
@@ -235,7 +239,7 @@ int main(int argc, char **argv) {
         set_fcyc_cache_size(1 << 23);   // 8MB cache size - Core i7 4970 L3 Cache Size
         set_fcyc_clear_cache(1);        // clear the cache before each measurement
         set_fcyc_compensate(1);         // try to compensate for timer overhead
-        double num_cycles_optimized = fcyc_v((test_funct_v)&implementation_driver_wraper, arglist);
+        double num_cycles_optimized = fcyc_v((test_funct_v) &implementation_driver_wraper, arglist);
         printf("\tNumber of cpu cycles consumed by your implementation: %.0f\n", num_cycles_optimized);
 
         // End instrumentation
@@ -247,12 +251,22 @@ int main(int argc, char **argv) {
         printf("*******************************************************************************************************\n");
     }
 
-    // Check the correctness of student's solution
-    copyFrame(frame_buffer, frame_copy, width, height);
-    implementation_driver_reference(sensor_values, sensor_values_count, frame_copy, width, height, false);
-    copyFrame(frame_buffer, frame_copy, width, height);
-    implementation_driver(sensor_values, sensor_values_count, frame_copy, width, height, false);
-    verifiedAllFrames();
+
+    if (timing_flag) {
+        copyFrame(frame_buffer, frame_copy, width, height);
+        for (int i = 0; i < 100; ++i) {
+            printf("Run #%d\n", i);
+            implementation_driver(sensor_values, sensor_values_count, frame_copy, width, height, true);
+        }
+    }
+    else {
+        //     Check the correctness of student's solution
+        copyFrame(frame_buffer, frame_copy, width, height);
+        implementation_driver_reference(sensor_values, sensor_values_count, frame_copy, width, height, false);
+        copyFrame(frame_buffer, frame_copy, width, height);
+        implementation_driver(sensor_values, sensor_values_count, frame_copy, width, height, false);
+        verifiedAllFrames();
+    }
 
     return 0;
 }
