@@ -128,25 +128,70 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
 	int width_3 = width * 3;
 
 	int pos, row, col, size = height * width_3, cnt = 0;
-	unsigned char* lastfp;
+	unsigned char* lastfp, *fp;
+	unsigned char* lim = frame_buffer + size - 8;
 //	for (int row0 = 0; row0 < height; row0 += STRIDE)
 //		for (int col0 = 0; col0 < width; col0 += STRIDE)
 	row = col = 0;
-	for (unsigned char* fp = frame_buffer; fp < frame_buffer + size; fp+=3) {
-		if ((*((unsigned int *) fp) & 0xFFFFFF) != 16777215) {
+	for (fp = frame_buffer; fp < lim; fp+=6) {
+		if (*((unsigned long long *) fp) != 0xFFFFFFFFFFFFFFFFLL) {
+			if ((*((unsigned int *) fp) & 0xFFFFFF) != 0xFFFFFF) {
+				testPixel[i] = (*((unsigned int *) fp) & 0xFFFFFF) | (0xFF000000);
+				if (fp != lastfp + 3 || col == width - 1) {
+					if ((fp - frame_buffer) >= (row + 1) * width_3)
+						row = (int) (fp - frame_buffer) / width_3;
+					col = ((int) (fp - frame_buffer) - (row * width_3)) / 3;
+				} else ++col;
+				testRow[i] = row;
+				testCol[i] = col;
+				i++;
+				lastfp = fp;
+			}
+			fp += 3;
+
+			if ((*((unsigned int *) fp) & 0xFFFFFF) != 0xFFFFFF) {
+				testPixel[i] = (*((unsigned int *) fp) & 0xFFFFFF) | (0xFF000000);
+				if (fp != lastfp + 3 || col == width - 1) {
+					if ((fp - frame_buffer) >= (row + 1) * width_3)
+						row = (int) (fp - frame_buffer) / width_3;
+					col = ((int) (fp - frame_buffer) - (row * width_3)) / 3;
+				} else ++col;
+				testRow[i] = row;
+				testCol[i] = col;
+				i++;
+				lastfp = fp;
+			}
+
+			fp += 3;
+			if ((*((unsigned int *) fp) & 0xFFFFFF) != 0xFFFFFF) {
+				testPixel[i] = (*((unsigned int *) fp) & 0xFFFFFF) | (0xFF000000);
+				if (fp != lastfp + 3 || col == width - 1) {
+					if ((fp - frame_buffer) >= (row + 1) * width_3)
+						row = (int) (fp - frame_buffer) / width_3;
+					col = ((int) (fp - frame_buffer) - (row * width_3)) / 3;
+				} else ++col;
+				testRow[i] = row;
+				testCol[i] = col;
+				i++;
+				lastfp = fp;
+				fp -= 3;
+			}
+			else fp -= 6;
+		}
+	}
+	for (; fp < frame_buffer + size; fp+=3)
+		if ((*((unsigned int *) fp) & 0xFFFFFF) != 0xFFFFFF) {
 			testPixel[i] = (*((unsigned int *) fp) & 0xFFFFFF) | (0xFF000000);
 			if (fp != lastfp + 3 || col == width - 1) {
 				if ((fp - frame_buffer) >= (row + 1) * width_3)
 					row = (int) (fp - frame_buffer) / width_3;
-				col = ((int)(fp - frame_buffer) - (row * width_3)) / 3;
-			}
-			else ++col;
+				col = ((int) (fp - frame_buffer) - (row * width_3)) / 3;
+			} else ++col;
 			testRow[i] = row;
 			testCol[i] = col;
 			i++;
 			lastfp = fp;
 		}
-	}
 	unsigned char *render_buffer = (unsigned char*)malloc((width * height * 3 + 4) * sizeof(char));
 	memset(render_buffer, 255, width_3 * height);
 
