@@ -6,6 +6,8 @@
 #include <assert.h>
 #include "utilities.h"  // DO NOT REMOVE this line
 #include "implementation_reference.h"   // DO NOT REMOVE this line
+#define STRIDE 10
+#define UNROLL16(S) {{S};{S};{S};{S};{S};{S};{S};{S};{S};{S};{S};{S};{S};{S};{S};{S};}
 #define UNROLL8(S) {{S};{S};{S};{S};{S};{S};{S};{S};}
 #define UNROLL4(S) {{S};{S};{S};{S};}
 
@@ -125,36 +127,26 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
 	int resizeFlag = 299000;
 	int width_3 = width * 3;
 
-	int pos, row, col, size = height * width_3;
-	for (pos = row = col = 0; pos < size - 24;) {
-		UNROLL8(
-		if ((((unsigned int *) &frame_buffer[pos])[0] & 0xFFFFFF) != 16777215) {
-			testPixel[i] = (((unsigned int *) &frame_buffer[pos])[0] & 0xFFFFFF) | (0xFF000000);
+	int pos, row, col, size = height * width_3, cnt = 0;
+	unsigned char* lastfp;
+//	for (int row0 = 0; row0 < height; row0 += STRIDE)
+//		for (int col0 = 0; col0 < width; col0 += STRIDE)
+	row = col = 0;
+	for (unsigned char* fp = frame_buffer; fp < frame_buffer + size; fp+=3) {
+		if ((*((unsigned int *) fp) & 0xFFFFFF) != 16777215) {
+			testPixel[i] = (*((unsigned int *) fp) & 0xFFFFFF) | (0xFF000000);
+			if (fp != lastfp + 3 || col == width - 1) {
+				if ((fp - frame_buffer) >= (row + 1) * width_3)
+					row = (int) (fp - frame_buffer) / width_3;
+				col = ((int)(fp - frame_buffer) - (row * width_3)) / 3;
+			}
+			else ++col;
 			testRow[i] = row;
 			testCol[i] = col;
 			i++;
-		}
-		if (++col == width) {
-			col = 0;
-			++row;
-		}
-		pos += 3;
-		);
-	}
-
-	for (; pos < size; pos += 3) {
-		if ((((unsigned int *) &frame_buffer[pos])[0] & 0xFFFFFF) != 16777215) {
-			testPixel[i] = (((unsigned int *) &frame_buffer[pos])[0] & 0xFFFFFF) | (0xFF0000);
-			testRow[i] = row;
-			testCol[i] = col;
-			i++;
-		}
-		if (++col == width) {
-			col = 0;
-			++row;
+			lastfp = fp;
 		}
 	}
-
 	unsigned char *render_buffer = (unsigned char*)malloc((width * height * 3 + 4) * sizeof(char));
 	memset(render_buffer, 255, width_3 * height);
 
@@ -237,6 +229,7 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
 				baseRow = testRow;
 				baseCol = testCol;
 			}
+
 			for (int j = 0; j < i; j++) {
 				int render_row = baseRow[j];
 				int render_col = baseCol[j];
@@ -257,7 +250,7 @@ void implementation_driver(struct kv *sensor_values, int sensor_values_count, un
 			int *j;
 			for (j = renderedPos; j < renderedPos + i - 4;) {
 				UNROLL4(*((unsigned int *) (render_buffer + (*j))) |= 0xffffffff;
-				++j;);
+						        ++j;);
 			}
 			for (; j < renderedPos + i; ++j) {
 				*((unsigned int *) (render_buffer + (*j))) |= 0xffffffff;
