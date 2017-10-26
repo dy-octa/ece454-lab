@@ -41,9 +41,12 @@ team_t team = {
 *************************************************************************/
 #define WSIZE       sizeof(void *)            /* word size (bytes) */
 #define DSIZE       (2 * WSIZE)            /* doubleword size (bytes) */
+#define QSIZE       (4 * WSIZE)            /* quadword size (bytes) */
 #define CHUNKSIZE   (1<<7)      /* initial heap size (bytes) */
 
+
 #define MAX(x, y) ((x) > (y)?(x) :(y))
+#define MIN(x, y) ((x) < (y)?(x) :(y))
 
 /* Pack a size and allocated bit into a word */
 #define PACK(size, alloc) ((size) | (alloc))
@@ -52,19 +55,96 @@ team_t team = {
 #define GET(p)          (*(uintptr_t *)(p))
 #define PUT(p, val)      (*(uintptr_t *)(p) = (val))
 
+/* Move a pointer pt by offset bytes */
+#define MOVE(pt, offset) ((void*)(pt) + offset)
+
+/* Align the size to 16B */
+#define ALIGN_16B(size) ((size) + (16 - (size) % 16))
+
+typedef struct block_st{
+	size_t size;
+	struct block_st* prev;
+	struct block_st* next;
+	char data[0];
+} block;
+
+/* Size of an empty block */
+#define EMPTY_BLOCKSIZE  (QSIZE)
+
 /* Read the size and allocated fields from address p */
-#define GET_SIZE(p)     (GET(p) & ~(DSIZE - 1))
-#define GET_ALLOC(p)    (GET(p) & 0x1)
+#define GET_SIZE(p)     ((size_t)((((block*)p) -> size) & ~(DSIZE - 1)))
+#define GET_DATASIZE(p)     (GET_SIZE(p) - EMPTY_BLOCKSIZE)
+#define GET_ALLOC(p)    ((((block*)p) -> size) & 0x1)
 
 /* Given block ptr bp, compute address of its header and footer */
-#define HDRP(bp)        ((char *)(bp) - WSIZE)
-#define FTRP(bp)        ((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)
+#define FTRP(bp)        ((size_t)(MOVE(bp, GET_SIZE(bp) - WSIZE)))
 
 /* Given block ptr bp, compute address of next and previous blocks */
-#define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
-#define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))
+#define NEXT_BLKP(bp) ((block*)MOVE(bp, GET_SIZE(bp)))
+#define PREV_BLKP(bp) ((block*)MOVE(bp, -GET_SIZE(MOVE(bp, WSIZE))))
+
+/* Set the footer of a block pointer pt */
+#define SET_FOOTER(pt) (PUT(FTRP(pt), ((block*) pt) -> size))
+
+#define EXT_LARGE_BLOCK_LIM 30000
+#define EXT_SMALL_BLOCK_LIM 160
+#define LIST_CNT 20
 
 void *heap_listp = NULL;
+block* list_heads[LIST_CNT];
+const int list_size[LIST_CNT] = {10, 19, 67, 75, 115, 131, 451, 515, 4075, 4098, 6655, 8193, 11045, 15363, 19610, 23949, 28703, 147587, 303363, 459139};
+
+/**********************************************************
+ * list_insert
+ * Insert the free block bp to the free list list_no
+ **********************************************************/
+void list_insert(block* bp, int list_no) {
+	if (list_heads[list_no] -> next) {
+		list_heads[list_no] -> next -> prev = bp;
+		bp -> next = list_heads[list_no] -> next;
+	}
+	list_heads[list_no] -> next = bp;
+	bp -> prev = list_heads[list_no];
+}
+
+/**********************************************************
+ * list_remove
+ * Remove the block bp from free list
+ **********************************************************/
+void list_remove(block* bp) {
+	if (bp -> prev)
+		bp -> prev -> next = bp -> next;
+	if (bp -> next)
+		bp -> next -> prev = bp -> prev;
+}
+
+/**********************************************************
+ * find_list
+ * Find the appropriate list for a block sized asize
+ **********************************************************/
+int find_list(size_t asize) {
+	int i;
+	if (asize <= list_size[0])
+		return 0;
+	for (i=0; i<LIST_CNT; ++i)
+		if (asize >= list_size[i])
+			return i;
+	return -1;
+}
+
+/**********************************************************
+ * relocate_free_segment
+ * Locate a free segment from bp sized size
+ * Assume that the size <= list_size[search_from]
+ **********************************************************/
+void relocate_free_segment(block* bp, size_t size, int search_from) {
+	int i;
+	for (i=search_from; i > 0; --i) {
+		if (GET_SIZE(bp) >= list_size[i] && GET_SIZE(bp) < list_size[i-1])
+			break;
+	}
+	list_insert(bp, i);
+}
 
 /**********************************************************
  * mm_init
@@ -72,14 +152,28 @@ void *heap_listp = NULL;
  * prologue and epilogue
  **********************************************************/
 int mm_init(void) {
-	if ((heap_listp = mem_sbrk(4 * WSIZE)) == (void *) -1)
+	if ((heap_listp = mem_sbrk(8 * WSIZE + LIST_CNT * EMPTY_BLOCKSIZE)) == (void *) -1)
 		return -1;
-	PUT(heap_listp, 0);                         // alignment padding
-	PUT(heap_listp + (1 * WSIZE), PACK(DSIZE, 1));   // prologue header
-	PUT(heap_listp + (2 * WSIZE), PACK(DSIZE, 1));   // prologue footer
-	PUT(heap_listp + (3 * WSIZE), PACK(0, 1));    // epilogue header
-	heap_listp += DSIZE;
+//	freopen("mm.log", "a", stderr);
+	block* pt = heap_listp;
+	PUT(pt, 0);                         // alignment padding
+	pt = MOVE(pt, 1);
+	((block*) pt) -> prev = NULL;
+	((block*) pt) -> next = NULL;
+	((block*) pt) -> size = PACK(EMPTY_BLOCKSIZE, 1); // prologue header
+	SET_FOOTER(pt); // prologue footer
 
+	for (int i=0; i < LIST_CNT; ++i) {
+		pt = MOVE(pt, QSIZE);
+		((block*) pt) -> prev = NULL;
+		((block*) pt) -> next = NULL;
+		((block*) pt) -> size = PACK(EMPTY_BLOCKSIZE, 1); // sentinel header
+		SET_FOOTER(pt); // sentinel footer
+		list_heads[i] = pt;
+	}
+
+	pt = MOVE(pt, QSIZE);
+	((block*) pt) -> size = PACK(1, 1); // epilogue header
 	return 0;
 }
 
@@ -91,30 +185,33 @@ int mm_init(void) {
  * - the previous block is available for coalescing
  * - both neighbours are available for coalescing
  **********************************************************/
-void *coalesce(void *bp) {
-	size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
-	size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
-	size_t size = GET_SIZE(HDRP(bp));
+void *coalesce(block *bp) {
+	int prev_alloc = GET_ALLOC(PREV_BLKP(bp));
+	int next_alloc = GET_ALLOC(NEXT_BLKP(bp));
+	size_t size = GET_SIZE(bp);
 
 	if (prev_alloc && next_alloc) {       /* Case 1 */
 		return bp;
 	} else if (prev_alloc && !next_alloc) { /* Case 2 */
-		size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
-		PUT(HDRP(bp), PACK(size, 0));
-		PUT(FTRP(bp), PACK(size, 0));
-		return (bp);
+		size += GET_SIZE(NEXT_BLKP(bp));
+		list_remove(bp);
+		list_remove((NEXT_BLKP(bp)));
 	} else if (!prev_alloc && next_alloc) { /* Case 3 */
-		size += GET_SIZE(HDRP(PREV_BLKP(bp)));
-		PUT(FTRP(bp), PACK(size, 0));
-		PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
-		return (PREV_BLKP(bp));
+		size += GET_SIZE(PREV_BLKP(bp));
+		list_remove(bp);
+		list_remove(PREV_BLKP(bp));
+		bp = PREV_BLKP(bp);
 	} else {            /* Case 4 */
-		size += GET_SIZE(HDRP(PREV_BLKP(bp))) +
-		        GET_SIZE(FTRP(NEXT_BLKP(bp)));
-		PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
-		PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
-		return (PREV_BLKP(bp));
+		size += GET_SIZE(PREV_BLKP(bp)) +
+		        GET_SIZE(NEXT_BLKP(bp));
+		list_remove(bp);
+		list_remove(PREV_BLKP(bp));
+		list_remove(NEXT_BLKP(bp));
+		bp = PREV_BLKP(bp);
 	}
+	bp->size = size;
+	SET_FOOTER(bp);
+	return bp;
 }
 
 /**********************************************************
@@ -123,19 +220,23 @@ void *coalesce(void *bp) {
  * requirements of course. Free the former epilogue block
  * and reallocate its new header
  **********************************************************/
-void *extend_heap(size_t words) {
-	char *bp;
+block* extend_heap(size_t words) {
+	block *bp;
 	size_t size;
 
 	/* Allocate an even number of words to maintain alignments */
 	size = (words % 2) ? (words + 1) * WSIZE : words * WSIZE;
 	if ((bp = mem_sbrk(size)) == (void *) -1)
 		return NULL;
+	bp -= WSIZE; // Remove old epilogue header
 
 	/* Initialize free block header/footer and the epilogue header */
-	PUT(HDRP(bp), PACK(size, 0));                // free block header
-	PUT(FTRP(bp), PACK(size, 0));                // free block footer
-	PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1));        // new epilogue header
+	bp -> size = PACK(size, 0);                  // free block header
+	SET_FOOTER(bp);               // free block footer
+
+	list_insert(bp, find_list(bp->size));
+
+	NEXT_BLKP(bp) -> size = PACK(1, 1);
 
 	/* Coalesce if the previous block was free */
 	return coalesce(bp);
@@ -148,10 +249,10 @@ void *extend_heap(size_t words) {
  * Return NULL if no free blocks can handle that size
  * Assumed that asize is aligned
  **********************************************************/
-void *find_fit(size_t asize) {
-	void *bp;
-	for (bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) {
-		if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp)))) {
+block *find_fit(size_t asize, block* listp) {
+	block *bp;
+	for (bp = listp; bp != NULL; bp = bp -> next) {
+		if (!GET_ALLOC(bp) && (asize <= GET_SIZE(bp))) {
 			return bp;
 		}
 	}
@@ -159,68 +260,73 @@ void *find_fit(size_t asize) {
 }
 
 /**********************************************************
- * place
- * Mark the block as allocated
- **********************************************************/
-void place(void *bp, size_t asize) {
-	/* Get the current block size */
-	size_t bsize = GET_SIZE(HDRP(bp));
-
-	PUT(HDRP(bp), PACK(bsize, 1));
-	PUT(FTRP(bp), PACK(bsize, 1));
-}
-
-/**********************************************************
  * mm_free
  * Free the block and coalesce with neighbouring blocks
  **********************************************************/
-void mm_free(void *bp) {
-	if (bp == NULL) {
+void mm_free(void* ptr) {
+	if (ptr == NULL) {
 		return;
 	}
-	size_t size = GET_SIZE(HDRP(bp));
-	PUT(HDRP(bp), PACK(size, 0));
-	PUT(FTRP(bp), PACK(size, 0));
+	block* bp = ptr;
+	bp -> size = GET_SIZE(bp);
+	SET_FOOTER(bp);
+	// prev and next of an allocated block should be NULL
+	list_insert(bp, find_list(bp->size));
 	coalesce(bp);
 }
 
+/**********************************************************
+ * place
+ * Allocate a new block from block bp
+ * Relocate the remaining free segment
+ **********************************************************/
+block* place(block* bp, int asize, int free_size, int listno_from) {
+	if (free_size - asize <= EMPTY_BLOCKSIZE)
+		asize = free_size;
+	list_remove(bp);
+	bp -> size = PACK(asize, 1);
+	SET_FOOTER(bp);
+	if (free_size > asize) {
+		block* rem = NEXT_BLKP(bp);
+		relocate_free_segment(rem, free_size - asize, listno_from);
+	}
+	return bp;
+}
 
 /**********************************************************
  * mm_malloc
  * Allocate a block of size bytes.
  * The type of search is determined by find_fit
  * The decision of splitting the block, or not is determined
- *   in place(..)
+ *   in place(...)
  * If no block satisfies the request, the heap is extended
  **********************************************************/
 void *mm_malloc(size_t size) {
+//	fprintf(stderr, "%d\n", size);
 	size_t asize; /* adjusted block size */
 	size_t extendsize; /* amount to extend heap if no fit */
-	char *bp;
+	block *bp;
+	int list_no, n_list_no;
 
 	/* Ignore spurious requests */
 	if (size == 0)
 		return NULL;
 
 	/* Adjust block size to include overhead and alignment reqs. */
-	if (size <= DSIZE)
-		asize = 2 * DSIZE;
-	else
-		asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
+	asize = ALIGN_16B(size + EMPTY_BLOCKSIZE);
 
-	/* Search the free list for a fit */
-	if ((bp = find_fit(asize)) != NULL) {
-		place(bp, asize);
-		return bp;
+	list_no = find_list(asize);
+	for (n_list_no = list_no; n_list_no < LIST_CNT; ++n_list_no) {
+		/* Search the free list for a fit */
+		if ((bp = find_fit(asize, list_heads[n_list_no])) != NULL)
+			return place(bp, asize, GET_SIZE(bp), n_list_no);
 	}
 
 	/* No fit found. Get more memory and place the block */
 	extendsize = MAX(asize, CHUNKSIZE);
 	if ((bp = extend_heap(extendsize / WSIZE)) == NULL)
 		return NULL;
-	place(bp, asize);
-	return bp;
-
+	return place(bp, asize, extendsize, LIST_CNT - 1);
 }
 
 /**********************************************************
@@ -236,20 +342,17 @@ void *mm_realloc(void *ptr, size_t size) {
 	/* If oldptr is NULL, then this is just malloc. */
 	if (ptr == NULL)
 		return (mm_malloc(size));
+//	fprintf(stderr, "%d\n", size);
 
 	void *oldptr = ptr;
 	void *newptr;
-	size_t copySize;
 
 	newptr = mm_malloc(size);
 	if (newptr == NULL)
 		return NULL;
 
 	/* Copy the old data. */
-	copySize = GET_SIZE(HDRP(oldptr));
-	if (size < copySize)
-		copySize = size;
-	memcpy(newptr, oldptr, copySize);
+	memcpy(((block*) newptr) -> data, ((block*) oldptr) -> data, MIN(GET_DATASIZE(oldptr), size));
 	mm_free(oldptr);
 	return newptr;
 }
@@ -260,5 +363,7 @@ void *mm_realloc(void *ptr, size_t size) {
  * Return nonzero if the heap is consistant.
  *********************************************************/
 int mm_check(void) {
+	for (int i=0; i < LIST_CNT; ++i) {
+	}
 	return 1;
 }
