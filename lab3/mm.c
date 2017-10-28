@@ -56,10 +56,10 @@ team_t team = {
 #define PUT(p, val)      (*(uintptr_t *)(p) = (val))
 
 /* Move a pointer pt by offset bytes */
-#define MOVE(pt, offset) ((void*)(pt) + offset)
+#define MOVE(pt, offset) (((void*)pt) + offset)
 
 /* Align the size to 16B */
-#define ALIGN_16B(size) ((size) + (16 - (size) % 16))
+#define ALIGN_16B(size) ((size) + (16 - (size & ~15LL)))
 
 typedef struct block_st{
 	size_t size;
@@ -87,8 +87,7 @@ typedef struct block_st{
 /* Set the footer of a block pointer pt */
 #define SET_FOOTER(pt) (PUT(FTRP(pt), ((block*) pt) -> size))
 
-#define EXT_LARGE_BLOCK_LIM 30000
-#define EXT_SMALL_BLOCK_LIM 160
+/* Number of segregated lists */
 #define LIST_CNT 20
 
 void *heap_listp = NULL;
@@ -140,8 +139,10 @@ int find_list(size_t asize) {
  **********************************************************/
 void relocate_free_segment(block* bp, size_t size, int search_from) {
 	int i;
+	bp->size = size;
+	SET_FOOTER(bp);
 	for (i=search_from; i > 0; --i) {
-		if (GET_SIZE(bp) >= list_size[i] && GET_SIZE(bp) < list_size[i-1])
+		if (size >= list_size[i] && size < list_size[i-1])
 			break;
 	}
 	list_insert(bp, i);
@@ -153,26 +154,24 @@ void relocate_free_segment(block* bp, size_t size, int search_from) {
  * prologue and epilogue
  **********************************************************/
 int mm_init(void) {
-	if ((heap_listp = mem_sbrk(8 * WSIZE + LIST_CNT * EMPTY_BLOCKSIZE)) == (void *) -1)
+	if ((heap_listp = mem_sbrk(5 * WSIZE + LIST_CNT * EMPTY_BLOCKSIZE)) == (void *) -1)
 		return -1;
 //	freopen("mm.log", "a", stderr);
 	block* pt = heap_listp;
-	PUT(pt, 0);                         // alignment padding
-	pt = MOVE(pt, 1);
+	pt = MOVE(pt, WSIZE);
 	((block*) pt) -> prev = NULL;
 	((block*) pt) -> next = NULL;
 	((block*) pt) -> size = PACK(EMPTY_BLOCKSIZE, 1); // prologue header
 	SET_FOOTER(pt); // prologue footer
 
 	for (int i=0; i < LIST_CNT; ++i) {
-		pt = MOVE(pt, QSIZE);
+		pt = MOVE(pt, EMPTY_BLOCKSIZE);
 		((block*) pt) -> prev = NULL;
 		((block*) pt) -> next = NULL;
-		((block*) pt) -> size = PACK(EMPTY_BLOCKSIZE, 1); // sentinel header
+		((block*) pt) -> size = PACK(EMPTY_BLOCKSIZE, 0); // sentinel header
 		SET_FOOTER(pt); // sentinel footer
 		list_heads[i] = pt;
 	}
-
 	pt = MOVE(pt, QSIZE);
 	((block*) pt) -> size = PACK(1, 1); // epilogue header
 	return 0;
@@ -210,8 +209,7 @@ void *coalesce(block *bp) {
 		list_remove(NEXT_BLKP(bp));
 		bp = PREV_BLKP(bp);
 	}
-	bp->size = size;
-	SET_FOOTER(bp);
+	relocate_free_segment(bp, size, LIST_CNT - 1);
 	return bp;
 }
 
@@ -265,7 +263,7 @@ block *find_fit(size_t asize, block* listp) {
  * Allocate a new block from block bp
  * Relocate the remaining free segment
  **********************************************************/
-block* place(block* bp, int asize, int free_size, int listno_from) {
+block* place(block* bp, int asize, int free_size, int listno) {
 	if (free_size - asize <= EMPTY_BLOCKSIZE)
 		asize = free_size;
 	list_remove(bp);
@@ -273,7 +271,7 @@ block* place(block* bp, int asize, int free_size, int listno_from) {
 	SET_FOOTER(bp);
 	if (free_size > asize) {
 		block* rem = NEXT_BLKP(bp);
-		relocate_free_segment(rem, free_size - asize, listno_from);
+		relocate_free_segment(rem, free_size - asize, listno);
 	}
 	return bp;
 }
@@ -317,11 +315,10 @@ void *mm_malloc(size_t size) {
 	asize = ALIGN_16B(size + EMPTY_BLOCKSIZE);
 
 	list_no = find_list(asize);
-	for (n_list_no = list_no; n_list_no < LIST_CNT; ++n_list_no) {
+	for (n_list_no = list_no; n_list_no < LIST_CNT; ++n_list_no)
 		/* Search the free list for a fit */
 		if ((bp = find_fit(asize, list_heads[n_list_no])) != NULL)
 			return place(bp, asize, GET_SIZE(bp), n_list_no) -> data;
-	}
 
 	/* No fit found. Get more memory and place the block */
 	extendsize = MAX(asize, CHUNKSIZE);
@@ -364,8 +361,39 @@ void *mm_realloc(void *ptr, size_t size) {
  * Return nonzero if the heap is consistant.
  *********************************************************/
 int mm_check(void) {
-	for (block* bp = mem_heap_lo(); bp < mem_heap_hi(); bp = NEXT_BLKP(bp)) {
+	for (int i = 0; i < LIST_CNT; ++i)
+		for (block* nbp = list_heads[i] -> next; nbp != NULL; nbp = nbp -> next) {
+			if (GET_ALLOC(nbp)) {
+				fprintf(stderr, "Error: Block %p sized %d in free list %d is allocated\n", nbp, GET_SIZE(nbp), i);
+				return 1;
+			}
+			if (GET_SIZE(nbp) < list_size[i] || (i != LIST_CNT - 1 && GET_SIZE(nbp) >= list_size[i+1] )) {
+				fprintf(stderr, "Error: Block %p sized %d stored free list for size %d\n", nbp, GET_SIZE(nbp), list_size[i]);
+				return 1;
+			}
+			block* bp;
+			for (bp = mem_heap_lo(); bp < mem_heap_hi(); bp = NEXT_BLKP(bp))
+				if (bp == nbp)
+					break;
+			if (bp >= mem_heap_hi()) {
+				fprintf(stderr, "Error: Block %p sized %d in free list %d could not be found in contiguity list\n", nbp, GET_SIZE(nbp), i);
+				return 1;
+			}
+		}
 
+	for (block* bp = mem_heap_lo(); bp < mem_heap_hi(); bp = NEXT_BLKP(bp)) {
+		int size = GET_SIZE(bp);
+		if (size > 0 && !GET_ALLOC(bp)) {
+			int listno = find_list(size);
+			block* nbp;
+			for (nbp = list_heads[listno]; nbp != NULL; nbp = nbp -> next)
+				if (nbp == bp)
+					break ;
+			if (nbp == NULL) {
+				fprintf(stderr, "Error: Block %p, sized %d could not be found in list %d\n", bp, size, listno);
+				return 1;
+			}
+		}
 	}
 	return 1;
 }
