@@ -78,6 +78,7 @@ typedef struct block_st{
 
 /* Given block ptr bp, compute address of its header and footer */
 #define FTRP(bp)        ((size_t)(MOVE(bp, GET_SIZE(bp) - WSIZE)))
+#define DATA2BLOCK(ptr) ((block*)(MOVE(ptr, -WSIZE)))
 
 /* Given block ptr bp, compute address of next and previous blocks */
 #define NEXT_BLKP(bp) ((block*)MOVE(bp, GET_SIZE(bp)))
@@ -260,22 +261,6 @@ block *find_fit(size_t asize, block* listp) {
 }
 
 /**********************************************************
- * mm_free
- * Free the block and coalesce with neighbouring blocks
- **********************************************************/
-void mm_free(void* ptr) {
-	if (ptr == NULL) {
-		return;
-	}
-	block* bp = ptr;
-	bp -> size = GET_SIZE(bp);
-	SET_FOOTER(bp);
-	// prev and next of an allocated block should be NULL
-	list_insert(bp, find_list(bp->size));
-	coalesce(bp);
-}
-
-/**********************************************************
  * place
  * Allocate a new block from block bp
  * Relocate the remaining free segment
@@ -291,6 +276,22 @@ block* place(block* bp, int asize, int free_size, int listno_from) {
 		relocate_free_segment(rem, free_size - asize, listno_from);
 	}
 	return bp;
+}
+
+/**********************************************************
+ * mm_free
+ * Free the block and coalesce with neighbouring blocks
+ **********************************************************/
+void mm_free(void* ptr) {
+	if (ptr == NULL) {
+		return;
+	}
+	block* bp = DATA2BLOCK(ptr);
+	bp -> size = GET_SIZE(bp);
+	SET_FOOTER(bp);
+	// prev and next of an allocated block should be NULL
+	list_insert(bp, find_list(bp->size));
+	coalesce(bp);
 }
 
 /**********************************************************
@@ -319,14 +320,14 @@ void *mm_malloc(size_t size) {
 	for (n_list_no = list_no; n_list_no < LIST_CNT; ++n_list_no) {
 		/* Search the free list for a fit */
 		if ((bp = find_fit(asize, list_heads[n_list_no])) != NULL)
-			return place(bp, asize, GET_SIZE(bp), n_list_no);
+			return place(bp, asize, GET_SIZE(bp), n_list_no) -> data;
 	}
 
 	/* No fit found. Get more memory and place the block */
 	extendsize = MAX(asize, CHUNKSIZE);
 	if ((bp = extend_heap(extendsize / WSIZE)) == NULL)
 		return NULL;
-	return place(bp, asize, extendsize, LIST_CNT - 1);
+	return place(bp, asize, extendsize, LIST_CNT - 1) -> data;
 }
 
 /**********************************************************
@@ -344,17 +345,17 @@ void *mm_realloc(void *ptr, size_t size) {
 		return (mm_malloc(size));
 //	fprintf(stderr, "%d\n", size);
 
-	void *oldptr = ptr;
-	void *newptr;
+	block *oldptr = DATA2BLOCK(ptr);
+	block *newptr;
 
 	newptr = mm_malloc(size);
 	if (newptr == NULL)
 		return NULL;
 
 	/* Copy the old data. */
-	memcpy(((block*) newptr) -> data, ((block*) oldptr) -> data, MIN(GET_DATASIZE(oldptr), size));
-	mm_free(oldptr);
-	return newptr;
+	memcpy(newptr -> data, oldptr -> data, MIN(GET_DATASIZE(oldptr), size));
+	mm_free(oldptr->data);
+	return newptr -> data;
 }
 
 /**********************************************************
@@ -363,7 +364,8 @@ void *mm_realloc(void *ptr, size_t size) {
  * Return nonzero if the heap is consistant.
  *********************************************************/
 int mm_check(void) {
-	for (int i=0; i < LIST_CNT; ++i) {
+	for (block* bp = mem_heap_lo(); bp < mem_heap_hi(); bp = NEXT_BLKP(bp)) {
+
 	}
 	return 1;
 }
