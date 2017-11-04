@@ -42,7 +42,7 @@ team_t team = {
 #define WSIZE       sizeof(void *)            /* word size (bytes) */
 #define DSIZE       (2 * WSIZE)            /* doubleword size (bytes) */
 #define QSIZE       (4 * WSIZE)            /* quadword size (bytes) */
-#define CHUNKSIZE   (1<<7)      /* initial heap size (bytes) */
+#define CHUNKSIZE   (4096)      /* initial heap size (bytes) */
 
 
 #define MAX(x, y) ((x) > (y)?(x) :(y))
@@ -78,7 +78,7 @@ typedef struct block_st{
 
 /* Given block ptr bp, compute address of its header and footer */
 #define FTRP(bp)        ((size_t)(MOVE(bp, GET_SIZE(bp) - WSIZE)))
-#define DATA2BLOCK(ptr) ((block*)(MOVE(ptr, -3*WSIZE)))
+#define DATA2BLOCK(ptr) ((block*)(MOVE(ptr, -sizeof(block))))
 
 /* Given block ptr bp, compute address of next and previous blocks */
 #define NEXT_BLKP(bp) ((block*)MOVE(bp, GET_SIZE(bp)))
@@ -108,13 +108,16 @@ int cmd_cnt;
  * Insert the free block bp to the free list list_no
  **********************************************************/
 void list_insert(block* bp, int list_no) {
-	if (list_heads[list_no] -> next) {
-		list_heads[list_no] -> next -> prev = bp;
-		bp -> next = list_heads[list_no] -> next;
+	block* pos = list_heads[list_no];
+	while (pos->next && pos->next < bp)
+		pos = pos->next;
+	if (pos -> next) {
+		pos -> next -> prev = bp;
+		bp -> next = pos -> next;
 	}
 	else bp -> next = NULL;
-	list_heads[list_no] -> next = bp;
-	bp -> prev = list_heads[list_no];
+	pos -> next = bp;
+	bp -> prev = pos;
 }
 
 /**********************************************************
@@ -137,10 +140,10 @@ int find_list(size_t asize) {
 	int i;
 	if (asize <= list_size[0])
 		return 0;
-	for (i=LIST_CNT - 1; i>=0; --i)
+	for (i=LIST_CNT - 1; i>=0; i--)
 		if (asize >= list_size[i])
 			return i;
-	return LIST_CNT;
+	return LIST_CNT - 1;
 }
 
 /**********************************************************
@@ -249,7 +252,6 @@ block* extend_heap(size_t words) {
 
 	list_insert(bp, find_list(bp->size));
 
-	block* epil = NEXT_BLKP(bp);
 	NEXT_BLKP(bp) -> size = PACK(1, 1); // Set new epilogue footer
 
 	/* Coalesce if the previous block was free */
@@ -282,12 +284,24 @@ block* place(block* bp, int asize, int free_size, int listno) {
 	if (free_size - asize <= EMPTY_BLOCKSIZE)
 		asize = free_size;
 	list_remove(bp);
-	bp -> size = PACK(asize, 1);
-	SET_FOOTER(bp);
-	if (free_size > asize) {
-		block* rem = NEXT_BLKP(bp);
-		relocate_free_segment(rem, free_size - asize, listno);
+	static char direction = 0;
+	if (direction) {
+		bp -> size = PACK(asize, 1);
+		SET_FOOTER(bp);
+		if (free_size > asize) {
+			block* rem = NEXT_BLKP(bp);
+			relocate_free_segment(rem, free_size - asize, listno);
+		}
 	}
+	else {
+		block* rem = bp;
+		PUT(MOVE(NEXT_BLKP(bp), -WSIZE), PACK(asize, 1));
+		bp = PREV_BLKP(NEXT_BLKP(bp));
+		bp -> size = PACK(asize, 1);
+		if (free_size > asize)
+			relocate_free_segment(rem, free_size - asize, listno);
+	}
+	direction ^= 1;
 	return bp;
 }
 
