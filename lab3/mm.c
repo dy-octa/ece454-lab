@@ -56,10 +56,10 @@ team_t team = {
 #define PUT(p, val)      (*(uintptr_t *)(p) = (val))
 
 /* Move a pointer pt by offset bytes */
-#define MOVE(pt, offset) (((void*)pt) + offset)
+#define MOVE(pt, offset) (((void*)(pt)) + (offset))
 
 /* Align the size to 16B */
-#define ALIGN_16B(size) (((size)&15LL)?((size|15LL)+1):size)
+#define ALIGN_16B(size) (((size)&15LL)?(((size)|15LL)+1):(size))
 
 typedef struct block_st{
 	size_t size;
@@ -72,12 +72,12 @@ typedef struct block_st{
 #define EMPTY_BLOCKSIZE  (QSIZE)
 
 /* Read the size and allocated fields from address p */
-#define GET_SIZE(p)     ((size_t)((((block*)p) -> size) & ~(DSIZE - 1)))
+#define GET_SIZE(p)     ((size_t)((((block*)(p)) -> size) & ~(DSIZE - 1)))
 #define GET_DATASIZE(p)     (GET_SIZE(p) - EMPTY_BLOCKSIZE)
-#define GET_ALLOC(p)    ((((block*)p) -> size) & 0x1)
+#define GET_ALLOC(p)    ((int)((((block*)(p)) -> size) & 0x1))
 
 /* Given block ptr bp, compute address of its header and footer */
-#define FTRP(bp)        ((size_t)(MOVE(bp, GET_SIZE(bp) - WSIZE)))
+#define FTRP(bp)        ((size_t*)(MOVE(bp, GET_SIZE(bp) - WSIZE)))
 #define DATA2BLOCK(ptr) ((block*)(MOVE(ptr, -sizeof(block))))
 
 /* Given block ptr bp, compute address of next and previous blocks */
@@ -85,15 +85,17 @@ typedef struct block_st{
 #define PREV_BLKP(bp) ((block*)MOVE(bp, -GET_SIZE(MOVE(bp, -WSIZE))))
 
 /* Set the footer of a block pointer pt */
-#define SET_FOOTER(pt) (PUT(FTRP(pt), ((block*) pt) -> size))
+#define SET_FOOTER(pt) ({PUT(FTRP(pt), ((block*) (pt)) -> size);})
 
 /* Number of segregated lists */
 #define LIST_CNT 20
 
 /* Debug output helpers */
-//#define DEBUG_OUTPUT
-#ifdef DEBUG_OUTPUT
+//#define DEBUG_MODE
+
+#ifdef DEBUG_MODE
 #define DEBUG(f, ...) (fprintf(stderr, (f), __VA_ARGS__))
+#define RUN_MM_CHECK
 #else
 #define DEBUG(f, ...) (0)
 #endif
@@ -277,15 +279,17 @@ block *find_fit(size_t asize, block* listp) {
 
 /**********************************************************
  * place
- * Allocate a new block from block bp
- * Relocate the remaining free segment
+ * Split a block sized asize from block bp with size free_size, located on list# <= listno
+ * des_direction: specify whether split the upper part(1) or lower part(0) of the block
+ * -1: split alternatively
  **********************************************************/
-block* place(block* bp, int asize, int free_size, int listno) {
+block* place(block* bp, int asize, int free_size, int listno, int des_direction) {
 	if (free_size - asize <= EMPTY_BLOCKSIZE)
 		asize = free_size;
 	list_remove(bp);
-	static char direction = 0;
-	if (direction) {
+	static char rec_direction = 0;
+	char direction = des_direction == -1? rec_direction : des_direction;
+	if (direction == 0) {
 		bp -> size = PACK(asize, 1);
 		SET_FOOTER(bp);
 		if (free_size > asize) {
@@ -301,7 +305,7 @@ block* place(block* bp, int asize, int free_size, int listno) {
 		if (free_size > asize)
 			relocate_free_segment(rem, free_size - asize, listno);
 	}
-	direction ^= 1;
+	rec_direction ^= 1;
 	return bp;
 }
 
@@ -310,8 +314,10 @@ block* place(block* bp, int asize, int free_size, int listno) {
  * Free the block and coalesce with neighbouring blocks
  **********************************************************/
 void mm_free(void* ptr) {
-//	mm_check();
-	DEBUG("mm_free %p @ %d\n", ptr, ++cmd_cnt);
+#ifdef RUN_MM_CHECK
+	mm_check();
+#endif
+	DEBUG("mm_free %d(%p) @ %d\n", (int)(ptr - mem_heap_lo() - 704), ptr, ++cmd_cnt);
 	if (ptr == NULL) {
 		return;
 	}
@@ -332,8 +338,10 @@ void mm_free(void* ptr) {
  * If no block satisfies the request, the heap is extended
  **********************************************************/
 void *mm_malloc(size_t size) {
-//	mm_check();
-	DEBUG("mm_malloc %d @ %d\n", size, ++cmd_cnt);
+#ifdef RUN_MM_CHECK
+	mm_check();
+#endif
+	DEBUG("mm_malloc %d @ %d -> ", size, ++cmd_cnt);
 	size_t asize; /* adjusted block size */
 	size_t extendsize; /* amount to extend heap if no fit */
 	block *bp;
@@ -350,8 +358,8 @@ void *mm_malloc(size_t size) {
 	for (n_list_no = list_no; n_list_no < LIST_CNT; ++n_list_no)
 		/* Search the free list for a fit */
 		if ((bp = find_fit(asize, list_heads[n_list_no])) != NULL) {
-			void* ret = place(bp, asize, GET_SIZE(bp), n_list_no)->data;
-			DEBUG("malloc return: %p\n", ret);
+			void* ret = place(bp, asize, GET_SIZE(bp), n_list_no, -1)->data;
+			DEBUG("%d(%p)\n", (int)(ret - mem_heap_lo() - 704), ret);
 			return ret;
 		}
 
@@ -359,8 +367,8 @@ void *mm_malloc(size_t size) {
 	extendsize = MAX(asize, CHUNKSIZE);
 	if ((bp = extend_heap(extendsize / WSIZE)) == NULL)
 		return NULL;
-	void* ret = place(bp, asize, GET_SIZE(bp), LIST_CNT - 1) -> data;
-	DEBUG("malloc return: %p\n", ret);
+	void* ret = place(bp, asize, GET_SIZE(bp), LIST_CNT - 1, -1) -> data;
+	DEBUG("%d(%p)\n", (int)(ret - mem_heap_lo() - 704), ret);
 	return ret;
 }
 
@@ -370,8 +378,10 @@ void *mm_malloc(size_t size) {
  *********************************************************/
 void *mm_realloc(void *ptr, size_t size) {
 	/* If size == 0 then this is just free, and we return NULL. */
-//	mm_check();
-	DEBUG("mm_realloc %p to size %d @ %d\n", ptr, size, ++cmd_cnt);
+#ifdef RUN_MM_CHECK
+	mm_check();
+#endif
+	DEBUG("mm_realloc %d(%p) to size %d @ %d\n", (int)(ptr - mem_heap_lo() - 704), ptr, size, ++cmd_cnt);
 	--cmd_cnt;
 	if (size == 0) {
 		mm_free(ptr);
@@ -381,18 +391,29 @@ void *mm_realloc(void *ptr, size_t size) {
 	if (ptr == NULL)
 		return (mm_malloc(size));
 
-	block *oldptr = DATA2BLOCK(ptr);
-	block *newptr;
+	block *bp = DATA2BLOCK(ptr);
+	int asize = ALIGN_16B(size + EMPTY_BLOCKSIZE);
+	// Coalesce with next empty block
+	if (!GET_ALLOC(NEXT_BLKP(bp))) {
+		list_remove(NEXT_BLKP(bp));
+		bp -> size = PACK(GET_SIZE(bp) + GET_SIZE(NEXT_BLKP(bp)), 1);
+		SET_FOOTER(bp);
+	}
+	// Try to split the current block
+	if (GET_SIZE(bp) >= asize) {
+		++cmd_cnt;
+		return place(bp, asize, GET_SIZE(bp), LIST_CNT - 1, 0)->data;
+	}
 
-	newptr = DATA2BLOCK(mm_malloc(size));
+	block* newptr = DATA2BLOCK(mm_malloc(size));
 	if (newptr == NULL)
 		return NULL;
 
 	/* Copy the old data. */
-	memcpy(newptr -> data, oldptr -> data, MIN(GET_DATASIZE(oldptr), size));
+	memcpy(newptr -> data, bp -> data, MIN(GET_DATASIZE(bp), size));
 	--cmd_cnt;
-	mm_free(oldptr->data);
-	DEBUG("realloc %p -> return %p (%d)\n", ptr, newptr->data, size);
+	mm_free(bp->data);
+	DEBUG("realloc %d(%p) -> return %d(%p) size %d\n", (int)(ptr - mem_heap_lo() - 704), ptr, (int)((void*)newptr - mem_heap_lo() - 704), newptr, size);
 	return newptr -> data;
 }
 
@@ -407,29 +428,29 @@ int mm_check(void) {
 	for (int i = 0; i < LIST_CNT; ++i)
 		for (nbp = list_heads[i] -> next; nbp != NULL; nbp = nbp -> next) {
 			if (GET_ALLOC(nbp)) {
-				fprintf(stderr, "Error: Block %p sized %d in free list %d is allocated\n", nbp, GET_SIZE(nbp), i);
+				fprintf(stderr, "Error: Block %p sized %d in free list %d is allocated\n", nbp, (int)GET_SIZE(nbp), i);
 				return 0;
 			}
 			if (GET_SIZE(nbp) < list_size[i] || (i != LIST_CNT - 1 && GET_SIZE(nbp) >= list_size[i+1] )) {
-				fprintf(stderr, "Error: Block %p sized %d stored free list for size %d\n", nbp, GET_SIZE(nbp), list_size[i]);
+				fprintf(stderr, "Error: Block %p sized %d stored free list for size %d\n", nbp, (int)GET_SIZE(nbp), list_size[i]);
 				return 0;
 			}
-			for (bp = start; bp < mem_heap_hi() - WSIZE; bp = NEXT_BLKP(bp))
+			for (bp = start; (void*)bp < mem_heap_hi() - WSIZE; bp = NEXT_BLKP(bp))
 				if (bp == nbp)
 					break;
-			if (bp > mem_heap_hi()) {
-				fprintf(stderr, "Error: Block %p sized %d in free list %d could not be found in contiguity list\n", nbp, GET_SIZE(nbp), i);
+			if ((void*)bp > mem_heap_hi()) {
+				fprintf(stderr, "Error: Block %p sized %d in free list %d could not be found in contiguity list\n", nbp, (int)GET_SIZE(nbp), i);
 				return 0;
 			}
 		}
 	if (GET(MOVE(start, -WSIZE)) != PACK(EMPTY_BLOCKSIZE, 1))
-		fprintf(stderr, "Error: Illegal prologue %p: %d\n", MOVE(start, -WSIZE), GET(MOVE(start, -WSIZE)));
-	DEBUG("Start scanning from heap range %p, to %p\n", start, mem_heap_hi() - WSIZE);
-	for (bp = start; bp < mem_heap_hi() - WSIZE; bp = NEXT_BLKP(bp)) {
+		fprintf(stderr, "Error: Illegal prologue %p: %d\n", MOVE(start, -WSIZE), (int)GET(MOVE(start, -WSIZE)));
+//	DEBUG("Start scanning from heap range %p, to %p\n", start, mem_heap_hi() - WSIZE);
+	for (bp = start; (void*)bp < mem_heap_hi() - WSIZE; bp = NEXT_BLKP(bp)) {
 		int size = GET_SIZE(bp);
-		DEBUG("(%p, %d)\n", bp, size);
+//		DEBUG("(%p, %d)\n", bp, size);
 		if (((size_t) (bp -> data)) & 0xF) {
-			fprintf(stderr, "Error: Block %p, sized %d, alloc:%d not aligned to 16B\n", bp, GET_SIZE(bp), GET_ALLOC(bp));
+			fprintf(stderr, "Error: Block %p, sized %d, alloc:%d not aligned to 16B\n", bp, (int)GET_SIZE(bp), GET_ALLOC(bp));
 			return 0;
 		}
 
@@ -445,6 +466,17 @@ int mm_check(void) {
 		}
 	}
 	if (bp -> size != PACK(1, 1))
-		fprintf(stderr, "Error: Illegal epilogue %p: %d\n", bp, bp->size);
+		fprintf(stderr, "Error: Illegal epilogue %p: %d\n", bp, (int)bp->size);
+
+	DEBUG("Current heap:\n", 0);
+	int acc_addr = 0;
+	for (bp = start;  (void*)bp < mem_heap_hi() - WSIZE; bp = NEXT_BLKP(bp))
+		DEBUG("\t%d%c\t|", (int)GET_DATASIZE(bp), GET_ALLOC(bp)?'a':'f');
+	DEBUG("\n", 0);
+	for (bp = start;  (void*)bp < mem_heap_hi() - WSIZE; bp = NEXT_BLKP(bp)) {
+		acc_addr += GET_SIZE(bp);
+		DEBUG("\t\t%d", acc_addr);
+	}
+	DEBUG("\n\n", 0);
 	return 1;
 }
