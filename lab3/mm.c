@@ -42,7 +42,7 @@ team_t team = {
 #define WSIZE       sizeof(void *)            /* word size (bytes) */
 #define DSIZE       (2 * WSIZE)            /* doubleword size (bytes) */
 #define QSIZE       (4 * WSIZE)            /* quadword size (bytes) */
-#define CHUNKSIZE   (4096)      /* initial heap size (bytes) */
+#define CHUNKSIZE   (32768)      /* initial heap size (bytes) */
 
 
 #define MAX(x, y) ((x) > (y)?(x) :(y))
@@ -58,8 +58,9 @@ team_t team = {
 /* Move a pointer pt by offset bytes */
 #define MOVE(pt, offset) (((void*)(pt)) + (offset))
 
-/* Align the size to 16B */
+/* Align the size */
 #define ALIGN_16B(size) (((size)&15LL)?(((size)|15LL)+1):(size))
+#define ALIGN_4K(size) (((size)&4095LL)?(((size)|4095LL)+1):(size))
 
 typedef struct block_st{
 	size_t size;
@@ -87,6 +88,9 @@ typedef struct block_st{
 /* Set the footer of a block pointer pt */
 #define SET_FOOTER(pt) ({PUT(FTRP(pt), ((block*) (pt)) -> size);})
 
+/* Last block in the heap */
+#define LAST_BLOCK (PREV_BLKP(mem_heap_hi() + 1 - WSIZE))
+
 /* Number of segregated lists */
 #define LIST_CNT 20
 
@@ -107,7 +111,7 @@ int cmd_cnt;
 
 /**********************************************************
  * list_insert
- * Insert the free block bp to the free list list_no
+ * Insert the free block bp to the free address-ordered list list_no
  **********************************************************/
 void list_insert(block* bp, int list_no) {
 	block* pos = list_heads[list_no];
@@ -150,7 +154,7 @@ int find_list(size_t asize) {
 
 /**********************************************************
  * relocate_free_segment
- * Locate a free segment from bp sized size
+ * Set up a free block from a free segment at bp sized size
  * Assume that the size <= list_size[search_from]
  **********************************************************/
 void relocate_free_segment(block* bp, size_t size, int search_from) {
@@ -175,7 +179,6 @@ int mm_init(void) {
 	if ((heap_listp = mem_sbrk(6 * WSIZE + LIST_CNT * EMPTY_BLOCKSIZE)) == (void *) -1)
 		return -1;
 	DEBUG("Init: allocate %d bytes, %p -> ", mem_heapsize(), heap_listp);
-//	freopen("mm.log", "a", stderr);
 	block* pt = heap_listp;
 	for (int i=0; i < LIST_CNT; ++i) {
 		pt -> prev = NULL;
@@ -208,7 +211,6 @@ void *coalesce(block *bp) {
 	int prev_alloc = GET_ALLOC(PREV_BLKP(bp));
 	int next_alloc = GET_ALLOC(NEXT_BLKP(bp));
 	size_t size = GET_SIZE(bp);
-
 	if (prev_alloc && next_alloc) {       /* Case 1 */
 		return bp;
 	} else if (prev_alloc && !next_alloc) { /* Case 2 */
@@ -228,7 +230,7 @@ void *coalesce(block *bp) {
 		list_remove(NEXT_BLKP(bp));
 		bp = PREV_BLKP(bp);
 	}
-	relocate_free_segment(bp, size, LIST_CNT - 1);
+	relocate_free_segment(bp, size, LIST_CNT - 1); // Set up block for the new free segment
 	return bp;
 }
 
@@ -263,25 +265,39 @@ block* extend_heap(size_t words) {
 
 /**********************************************************
  * find_fit
- * Traverse the heap searching for a block to fit asize
+ * Traverse the free list listp searching for a block to fit asize
  * Return NULL if no free blocks can handle that size
  * Assumed that asize is aligned
  **********************************************************/
 block *find_fit(size_t asize, block* listp) {
-	block *bp;
+#ifdef BEST_FIT
+	block *bp, *ret = NULL;
+	int sized;
 	for (bp = listp; bp != NULL; bp = bp -> next) {
 		if (!GET_ALLOC(bp) && (asize <= GET_SIZE(bp))) {
-			return bp;
+			if (ret == NULL || GET_SIZE(bp) - asize < sized) {
+				sized = GET_SIZE(bp) - asize;
+				ret = bp;
+			}
 		}
 	}
+	return ret;
+#else
+	// use first fit method as default
+	block *bp;
+	for (bp = listp; bp != NULL; bp = bp -> next) {
+		if (!GET_ALLOC(bp) && (asize <= GET_SIZE(bp)))
+			return bp;
+	}
 	return NULL;
+#endif
 }
 
 /**********************************************************
  * place
  * Split a block sized asize from block bp with size free_size, located on list# <= listno
  * des_direction: specify whether split the upper part(1) or lower part(0) of the block
- * -1: split alternatively
+ * -1: split in alternative ways
  **********************************************************/
 block* place(block* bp, int asize, int free_size, int listno, int des_direction) {
 	if (free_size - asize <= EMPTY_BLOCKSIZE)
@@ -364,7 +380,22 @@ void *mm_malloc(size_t size) {
 		}
 
 	/* No fit found. Get more memory and place the block */
-	extendsize = MAX(asize, CHUNKSIZE);
+//	if (!GET_ALLOC(LAST_BLOCK))
+//		extendsize -= GET_SIZE(LAST_BLOCK);
+
+//	static int asize_rec[25] = {0};
+//	static int asize_pt = 0;
+//	static int ext_cnt = 0;
+//	static int asize_sum = 0;
+
+//	asize_sum = asize_sum - asize_rec[asize_pt] + asize;
+//	asize_rec[asize_pt] = asize;
+//	asize_pt = (asize_pt + 1) % 25;
+//	if (++ext_cnt>=25)
+//		CHUNKSIZE = asize_sum;
+
+	extendsize = asize;
+	extendsize = MAX(extendsize, CHUNKSIZE);
 	if ((bp = extend_heap(extendsize / WSIZE)) == NULL)
 		return NULL;
 	void* ret = place(bp, asize, GET_SIZE(bp), LIST_CNT - 1, -1) -> data;
@@ -405,6 +436,7 @@ void *mm_realloc(void *ptr, size_t size) {
 		return place(bp, asize, GET_SIZE(bp), LIST_CNT - 1, 0)->data;
 	}
 
+	// When we have to allocate a new block
 	block* newptr = DATA2BLOCK(mm_malloc(size));
 	if (newptr == NULL)
 		return NULL;
@@ -425,6 +457,7 @@ void *mm_realloc(void *ptr, size_t size) {
 int mm_check(void) {
 	block* start = mem_heap_lo() + 5*WSIZE + LIST_CNT * EMPTY_BLOCKSIZE;
 	block *bp, *nbp;
+	// Traverse all the free lists
 	for (int i = 0; i < LIST_CNT; ++i)
 		for (nbp = list_heads[i] -> next; nbp != NULL; nbp = nbp -> next) {
 			if (GET_ALLOC(nbp)) {
@@ -446,6 +479,7 @@ int mm_check(void) {
 	if (GET(MOVE(start, -WSIZE)) != PACK(EMPTY_BLOCKSIZE, 1))
 		fprintf(stderr, "Error: Illegal prologue %p: %d\n", MOVE(start, -WSIZE), (int)GET(MOVE(start, -WSIZE)));
 //	DEBUG("Start scanning from heap range %p, to %p\n", start, mem_heap_hi() - WSIZE);
+	// Traverse through the heap
 	for (bp = start; (void*)bp < mem_heap_hi() - WSIZE; bp = NEXT_BLKP(bp)) {
 		int size = GET_SIZE(bp);
 //		DEBUG("(%p, %d)\n", bp, size);
@@ -468,6 +502,7 @@ int mm_check(void) {
 	if (bp -> size != PACK(1, 1))
 		fprintf(stderr, "Error: Illegal epilogue %p: %d\n", bp, (int)bp->size);
 
+	// Out put a diagram for the current heap
 	DEBUG("Current heap:\n", 0);
 	int acc_addr = 0;
 	for (bp = start;  (void*)bp < mem_heap_hi() - WSIZE; bp = NEXT_BLKP(bp))
