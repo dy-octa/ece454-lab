@@ -84,7 +84,9 @@ typedef struct ablock_st{
 
 /* Given block ptr bp, compute address of its header and footer */
 #define FTRP(bp)        ((size_t*)(MOVE(bp, GET_SIZE(bp) - WSIZE)))
-#define DATA2BLOCK(ptr) ((block*)(MOVE(ptr, -sizeof(block))))
+
+/* Given pointer to data of an allocated block, return a pointer to the block */
+#define DATA2BLOCK(ptr) ((ablock*)(MOVE(ptr, -sizeof(ablock))))
 
 /* Given block ptr bp, compute address of next and previous blocks */
 #define NEXT_BLKP(bp) ((block*)MOVE(bp, GET_SIZE(bp)))
@@ -100,7 +102,7 @@ typedef struct ablock_st{
 #define LIST_CNT 20
 
 /* Debug output helpers */
-#define DEBUG_MODE
+//#define DEBUG_MODE
 
 #ifdef DEBUG_MODE
 #define DEBUG(f, ...) (fprintf(stderr, (f), __VA_ARGS__))
@@ -113,6 +115,7 @@ void *heap_listp = NULL;
 block* list_heads[LIST_CNT];
 const int list_size[LIST_CNT] = {10, 19, 67, 75, 115, 131, 451, 515, 4075, 4098, 6655, 8193, 11045, 15363, 19610, 23949, 28703, 147587, 303363, 459139};
 int cmd_cnt;
+int heap_starts;
 
 void why(){
 	printf("WHY\n");
@@ -195,6 +198,7 @@ void relocate_free_segment(block* bp, size_t size, int search_from) {
  * prologue and epilogue
  **********************************************************/
 int mm_init(void) {
+//	freopen ("mm.log", "a", stderr);
 	freopen ("/dev/tty", "a", stderr);
 	cmd_cnt = 0;
 	if ((heap_listp = mem_sbrk(6 * WSIZE + LIST_CNT * EMPTY_BLOCKSIZE)) == (void *) -1)
@@ -215,6 +219,7 @@ int mm_init(void) {
 	pt -> size = PACK(EMPTY_BLOCKSIZE, 1); // prologue header
 	SET_FOOTER(pt); // prologue footer
 	pt = MOVE(pt, EMPTY_BLOCKSIZE);
+	heap_starts = MOVE(pt, WSIZE);
 	pt -> size = PACK(1, 1); // epilogue header
 	DEBUG("%p\n", MOVE(pt, WSIZE));
 	return 0;
@@ -295,7 +300,7 @@ block *find_fit(size_t asize, block* listp) {
 #ifdef BEST_FIT
 	block *bp, *ret = NULL;
 	int sized;
-	for (bp = listp; bp != NULL; bp = bp -> next) {
+	for (bp = listp -> next; bp != NULL; bp = bp -> next) {
 		if (!GET_ALLOC(bp) && (asize <= GET_SIZE(bp))) {
 			if (ret == NULL || GET_SIZE(bp) - asize < sized) {
 				sized = GET_SIZE(bp) - asize;
@@ -307,7 +312,7 @@ block *find_fit(size_t asize, block* listp) {
 #else
 	// use first fit method as default
 	block *bp;
-	for (bp = listp; bp != NULL; bp = bp -> next) {
+	for (bp = listp -> next; bp != NULL; bp = bp -> next) {
 		if (!GET_ALLOC(bp) && (asize <= GET_SIZE(bp)))
 			return bp;
 	}
@@ -356,7 +361,7 @@ void mm_free(void* ptr) {
 #ifdef RUN_MM_CHECK
 	mm_check();
 #endif
-	DEBUG("mm_free %d(%p) @ %d\n", (int)(ptr - mem_heap_lo() - 704), ptr, ++cmd_cnt);
+	DEBUG("mm_free %d(%p) @ %d\n", (int)(ptr - heap_starts), ptr, ++cmd_cnt);
 	if (ptr == NULL) {
 		return;
 	}
@@ -386,7 +391,6 @@ void *mm_malloc(size_t size) {
 	size_t asize; /* adjusted block size */
 	size_t extendsize; /* amount to extend heap if no fit */
 	block *bp;
-	block *temp;
 	int list_no, n_list_no;
 
 	/* Ignore spurious requests */
@@ -396,17 +400,12 @@ void *mm_malloc(size_t size) {
 	/* Adjust block size to include overhead and alignment reqs. */
 	asize = ALIGN_16B(size + DSIZE);
 
-	if(size == 9)
-		why();
-
-
-
 	list_no = find_list(asize);
 	for (n_list_no = list_no; n_list_no < LIST_CNT; ++n_list_no)
 		/* Search the free list for a fit */
 		if ((bp = find_fit(asize, list_heads[n_list_no])) != NULL) {
 			void* ret = place(bp, asize, GET_SIZE(bp), n_list_no, -1)->data;
-			DEBUG("%d(%p)\n", (int)(ret - mem_heap_lo() - 704), ret);
+			DEBUG("%d(%p)\n", (int)(ret - heap_starts), ret);
 			return ret;
 		}
 
@@ -430,7 +429,7 @@ void *mm_malloc(size_t size) {
 	if ((bp = extend_heap(extendsize / WSIZE)) == NULL)
 		return NULL;
 	void* ret = place(bp, asize, GET_SIZE(bp), LIST_CNT - 1, -1) -> data;
-	DEBUG("%d(%p)\n", (int)(ret - mem_heap_lo() - 704), ret);
+	DEBUG("%d(%p)\n", (int)(ret - heap_starts), ret);
 	return ret;
 }
 
@@ -443,7 +442,7 @@ void *mm_realloc(void *ptr, size_t size) {
 #ifdef RUN_MM_CHECK
 	mm_check();
 #endif
-	DEBUG("mm_realloc %d(%p) to size %d @ %d\n", (int)(ptr - mem_heap_lo() - 704), ptr, size, ++cmd_cnt);
+	DEBUG("mm_realloc %d(%p) to size %d @ %d\n", (int)(ptr - heap_starts), ptr, size, ++cmd_cnt);
 	--cmd_cnt;
 	if (size == 0) {
 		mm_free(ptr);
@@ -453,7 +452,7 @@ void *mm_realloc(void *ptr, size_t size) {
 	if (ptr == NULL)
 		return (mm_malloc(size));
 
-	block *bp = DATA2BLOCK(ptr);
+	ablock *bp = DATA2BLOCK(ptr);
 	int asize = ALIGN_16B(size + DSIZE);
 	// Coalesce with next empty block
 	if (!GET_ALLOC(NEXT_BLKP(bp))) {
@@ -468,7 +467,7 @@ void *mm_realloc(void *ptr, size_t size) {
 	}
 
 	// When we have to allocate a new block
-	block* newptr = DATA2BLOCK(mm_malloc(size));
+	ablock* newptr = DATA2BLOCK(mm_malloc(size));
 	if (newptr == NULL)
 		return NULL;
 
@@ -476,7 +475,7 @@ void *mm_realloc(void *ptr, size_t size) {
 	memcpy(newptr -> data, bp -> data, MIN(GET_DATASIZE(bp), size));
 	--cmd_cnt;
 	mm_free(bp->data);
-	DEBUG("realloc %d(%p) -> return %d(%p) size %d\n", (int)(ptr - mem_heap_lo() - 704), ptr, (int)((void*)newptr - mem_heap_lo() - 704), newptr, size);
+	DEBUG("realloc %d(%p) -> return %d(%p) size %d\n", (int)(ptr - heap_starts), ptr, (int)((void*)newptr - heap_starts), newptr, size);
 	return newptr -> data;
 }
 
