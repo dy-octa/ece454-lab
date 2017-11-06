@@ -430,6 +430,9 @@ void *mm_malloc(size_t size) {
 
 	if (asize > chunksize)
 		chunksize = MIN(MAXCHUNKSIZE, chunksize * 2);
+	block* last = LAST_BLOCK();
+	if (!(GET_ALLOC(last) || last < heap_starts))
+		asize -= GET_SIZE(last);
 	extendsize = MAX(asize, chunksize);
 	if ((bp = extend_heap(extendsize / WSIZE)) == NULL)
 		return NULL;
