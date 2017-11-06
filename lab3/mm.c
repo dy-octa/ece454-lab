@@ -1,12 +1,19 @@
 /*
- * This implementation replicates the implicit list implementation
- * provided in the textbook
- * "Computer Systems - A Programmer's Perspective"
- * Blocks are never coalesced or reused.
- * Realloc is implemented directly using mm_malloc and mm_free.
+ * The structure of a block of memory is as follows:
+ * Unallocated Block: Header(word) + pointer prev(word) + pointer next(word)
+ * + footer(word) + payload. The minimum size of a block will be 4 * Word size of the machine.
+ * on 64 bit the minimum block size will be 32 bytes.
  *
- * NOTE TO STUDENTS: Replace this header comment with your own header
- * comment that gives a high level description of your solution.
+ * Allocated Block: Header(word) + payload + footer(word). Minimum 16 bytes
+ *
+ * Blocks are searched first by traversing the list heads to find the correct segregated list then an
+ * empty block is found through a first_fit method.
+ * Segregated list #i holds free blocks size [list_size[i], list_size[i+1])
+ * Except the first list which holds any block with size smaller than list_size[0], and the last list
+ * which holds any block with size larget than list_size[LIST_CNT-1]
+ *
+ * Blocks are coalesced immediately after being freed and returned to the pool of memory.
+ *
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,7 +49,7 @@ team_t team = {
 #define WSIZE       sizeof(void *)            /* word size (bytes) */
 #define DSIZE       (2 * WSIZE)            /* doubleword size (bytes) */
 #define QSIZE       (4 * WSIZE)            /* quadword size (bytes) */
-#define MAXCHUNKSIZE   (32768)      /* initial heap size (bytes) */
+#define MAXCHUNKSIZE   (32768)      /* maximal heap chunk size (bytes) */
 
 
 #define MAX(x, y) ((x) > (y)?(x) :(y))
@@ -62,6 +69,7 @@ team_t team = {
 #define ALIGN_16B(size) (((size)&15LL)?(((size)|15LL)+1):(size))
 #define ALIGN_4K(size) (((size)&4095LL)?(((size)|4095LL)+1):(size))
 
+/* Free block structure */
 typedef struct block_st{
 	size_t size;
 	struct block_st* prev;
@@ -69,18 +77,22 @@ typedef struct block_st{
 	char data[0];
 } block;
 
+/* Allocated block structure */
 typedef struct ablock_st{
 	size_t size;
 	char data[0];
 } ablock;
+// Footer can not be accessed directly without using the macro below
 
-/* Size of an empty block */
+/* Size of an empty free block */
 #define EMPTY_BLOCKSIZE  (QSIZE)
 
 /* Read the size and allocated fields from address p */
 #define GET_SIZE(p)     ((size_t)((((block*)(p)) -> size) & ~(DSIZE - 1)))
-#define GET_DATASIZE(p)     (GET_SIZE(p) - DSIZE)
 #define GET_ALLOC(p)    ((int)((((block*)(p)) -> size) & 0x1))
+
+/* Size of payload of an allocated block p */
+#define GET_DATASIZE(abp)     (GET_SIZE(abp) - DSIZE)
 
 /* Given block ptr bp, compute address of its header and footer */
 #define FTRP(bp)        ((size_t*)(MOVE(bp, GET_SIZE(bp) - WSIZE)))
@@ -111,29 +123,25 @@ typedef struct ablock_st{
 #define DEBUG(f, ...) (0)
 #endif
 
-void *heap_listp = NULL;
+/* Head nodes of segregated lists */
 block* list_heads[LIST_CNT];
-const int list_size[LIST_CNT] = {9, 18, 66, 74, 114, 130, 162, 450, 514, 1720, 4074, 4097, 5559, 8192, 11138, 15458, 19514, 23947, 28423};
-int cmd_cnt;
-int heap_starts;
+/* Block size constraint of each list */
+const int list_size[LIST_CNT] = {23, 32, 80, 88, 128, 144, 176, 464, 528, 1734, 4088, 4111, 5573, 8206, 11152, 15472, 19528, 23961, 28437};
+
+/* Minimum size each time heap break increases */
 int chunksize;
 
-void why(){
-	printf("WHY\n");
-	printf("WHY\n");
-	printf("WHY\n");
-	printf("WHY\n");
-
-	return;
-}
+/* Used for logging */
+int cmd_cnt;
+int heap_starts;
 
 /**********************************************************
  * list_insert
  * Insert the free block bp to the free address-ordered list list_no
  **********************************************************/
 void list_insert(block* bp, int list_no) {
-	//printf("I'M INSERTING SOMETHING\n");
 	block* pos = list_heads[list_no];
+	/* Find the appropriate position to insert the node */
 	while (pos->next && pos->next < bp)
 		pos = pos->next;
 	if (pos -> next) {
@@ -143,12 +151,6 @@ void list_insert(block* bp, int list_no) {
 	else bp -> next = NULL;
 	pos -> next = bp;
 	bp -> prev = pos;
-
-	/*printf("bp: %d", bp);
-	printf("bp: %d", bp);
-	printf("bp: %d", bp);
-	printf("bp: %d", bp);
-	printf("bp: %d", bp);*/
 }
 
 /**********************************************************
@@ -169,6 +171,7 @@ void list_remove(block* bp) {
  **********************************************************/
 int find_list(size_t asize) {
 	int i;
+	/* List #0 also stores the blocks < list_size[0] */
 	if (asize <= list_size[0])
 		return 0;
 	for (i=LIST_CNT - 1; i>=0; i--)
@@ -179,8 +182,10 @@ int find_list(size_t asize) {
 
 /**********************************************************
  * relocate_free_segment
- * Set up a free block from a free segment at bp sized size
+ * Build up a free block from a free segment at bp sized size
  * Assume that the size <= list_size[search_from]
+ * search_from is used to accelerate the search if some extra
+ * information is known.
  **********************************************************/
 void relocate_free_segment(block* bp, size_t size, int search_from) {
 	int i;
@@ -202,12 +207,16 @@ int mm_init(void) {
 //	freopen ("mm.log", "a", stderr);
 //	freopen ("/dev/tty", "a", stderr);
 //	freopen("size.log", "a", stderr);
+	void* heap_listp;
 	cmd_cnt = 0;
+	// Initial chunk size
 	chunksize = 8224;
+	// Make up the space for list heads, prologue & epilogue
 	if ((heap_listp = mem_sbrk(6 * WSIZE + LIST_CNT * EMPTY_BLOCKSIZE)) == (void *) -1)
 		return -1;
 	DEBUG("Init: allocate %d bytes, %p -> ", mem_heapsize(), heap_listp);
 	block* pt = heap_listp;
+	// Set up an empty block as the head (sentinel) node of each segregated list
 	for (int i=0; i < LIST_CNT; ++i) {
 		pt -> prev = NULL;
 		pt -> next = NULL;
@@ -237,7 +246,6 @@ int mm_init(void) {
  * - both neighbours are available for coalescing
  **********************************************************/
 void *coalesce(block *bp) {
-	//printf("COALESCE\n");
 	int prev_alloc = GET_ALLOC(PREV_BLKP(bp));
 	int next_alloc = GET_ALLOC(NEXT_BLKP(bp));
 	size_t size = GET_SIZE(bp);
@@ -260,7 +268,7 @@ void *coalesce(block *bp) {
 		list_remove(NEXT_BLKP(bp));
 		bp = PREV_BLKP(bp);
 	}
-	relocate_free_segment(bp, size, LIST_CNT - 1); // Set up block for the new free segment
+	relocate_free_segment(bp, size, LIST_CNT - 1); // Set up block for the new coalesced free segment
 	return bp;
 }
 
@@ -303,6 +311,7 @@ block *find_fit(size_t asize, block* listp) {
 #ifdef BEST_FIT
 	block *bp, *ret = NULL;
 	int sized;
+	/* Starting from the first "real" block in the list */
 	for (bp = listp -> next; bp != NULL; bp = bp -> next) {
 		if (!GET_ALLOC(bp) && (asize <= GET_SIZE(bp))) {
 			if (ret == NULL || GET_SIZE(bp) - asize < sized) {
@@ -315,6 +324,7 @@ block *find_fit(size_t asize, block* listp) {
 #else
 	// use first fit method as default
 	block *bp;
+	/* Starting from the first "real" block in the list */
 	for (bp = listp -> next; bp != NULL; bp = bp -> next) {
 		if (!GET_ALLOC(bp) && (asize <= GET_SIZE(bp)))
 			return bp;
@@ -330,12 +340,12 @@ block *find_fit(size_t asize, block* listp) {
  * -1: split in alternative ways
  **********************************************************/
 ablock* place(block* bp, int asize, int free_size, int listno, int des_direction) {
-	if (free_size - asize <= EMPTY_BLOCKSIZE)
+	if (free_size - asize <= EMPTY_BLOCKSIZE) // If the remaining space after the split could not hold a block
 		asize = free_size;
 	list_remove(bp);
 	static char rec_direction = 0;
 	char direction = des_direction == -1? rec_direction : des_direction;
-	if (direction == 0) {
+	if (direction == 0) { // Split the block from the lower address
 		bp -> size = PACK(asize, 1);
 		SET_FOOTER(bp);
 		if (free_size > asize) {
@@ -343,7 +353,7 @@ ablock* place(block* bp, int asize, int free_size, int listno, int des_direction
 			relocate_free_segment(rem, free_size - asize, listno);
 		}
 	}
-	else {
+	else { // Split the block from the upper address
 		block* rem = bp;
 		PUT(MOVE(NEXT_BLKP(bp), -WSIZE), PACK(asize, 1));
 		bp = PREV_BLKP(NEXT_BLKP(bp));
@@ -351,8 +361,7 @@ ablock* place(block* bp, int asize, int free_size, int listno, int des_direction
 		if (free_size > asize)
 			relocate_free_segment(rem, free_size - asize, listno);
 	}
-
-	rec_direction ^= 1;
+	rec_direction ^= 1; // Direction changes next time
 	return (ablock*)bp;
 }
 
@@ -371,7 +380,7 @@ void mm_free(void* ptr) {
 	block* bp = DATA2BLOCK((block *)ptr);
 	bp -> size = GET_SIZE(bp);
 	SET_FOOTER(bp);
-	// prev and next of an allocated block should be NULL
+	// prev and next of an allocated block should be overlapped by data
 	bp->next = NULL;
 	bp->prev = NULL;
 	list_insert(bp, find_list(bp->size));
@@ -390,7 +399,6 @@ void *mm_malloc(size_t size) {
 #ifdef RUN_MM_CHECK
 	mm_check();
 #endif
-//	fprintf(stderr, "%d\n", size);
 	DEBUG("mm_malloc %d @ %d -> ", size, ++cmd_cnt);
 	size_t asize; /* adjusted block size */
 	size_t extendsize; /* amount to extend heap if no fit */
@@ -404,6 +412,7 @@ void *mm_malloc(size_t size) {
 	/* Adjust block size to include overhead and alignment reqs. */
 	asize = ALIGN_16B(size + DSIZE);
 
+	/* Find the appropriate list to start to search for a fit free block */
 	list_no = find_list(asize);
 	for (n_list_no = list_no; n_list_no < LIST_CNT; ++n_list_no)
 		/* Search the free list for a fit */
@@ -428,11 +437,10 @@ void *mm_malloc(size_t size) {
 //	if (++ext_cnt>=25)
 //		CHUNKSIZE = asize_sum;
 
+	// Adjust the chunk size adaptively
 	if (asize > chunksize)
 		chunksize = MIN(MAXCHUNKSIZE, chunksize * 2);
-	block* last = LAST_BLOCK();
-	if (!(GET_ALLOC(last) || last < heap_starts))
-		asize -= GET_SIZE(last);
+
 	extendsize = MAX(asize, chunksize);
 	if ((bp = extend_heap(extendsize / WSIZE)) == NULL)
 		return NULL;
@@ -497,15 +505,19 @@ int mm_check(void) {
 	block *bp, *nbp;
 	// Traverse all the free lists
 	for (int i = 0; i < LIST_CNT; ++i)
+		// Traverse the blocks in the free list
 		for (nbp = list_heads[i] -> next; nbp != NULL; nbp = nbp -> next) {
+			// Check if the block is free
 			if (GET_ALLOC(nbp)) {
 				fprintf(stderr, "Error: Block %p sized %d in free list %d is allocated\n", nbp, (int)GET_SIZE(nbp), i);
 				return 0;
 			}
-			if (GET_SIZE(nbp) < list_size[i] || (i != LIST_CNT - 1 && GET_SIZE(nbp) >= list_size[i+1] )) {
+			// Check if the size of the block fits the list
+			if ((i != 0 && GET_SIZE(nbp) < list_size[i]) || (i != LIST_CNT - 1 && GET_SIZE(nbp) >= list_size[i+1] )) {
 				fprintf(stderr, "Error: Block %p sized %d stored free list for size %d\n", nbp, (int)GET_SIZE(nbp), list_size[i]);
 				return 0;
 			}
+			// Check if the block presents in the implicit list (linked in the heap by sizes)
 			for (bp = start; (void*)bp < mem_heap_hi() - WSIZE; bp = NEXT_BLKP(bp))
 				if (bp == nbp)
 					break;
@@ -514,6 +526,7 @@ int mm_check(void) {
 				return 0;
 			}
 		}
+	// Check if the prologue is correct
 	if (GET(MOVE(start, -WSIZE)) != PACK(EMPTY_BLOCKSIZE, 1))
 		fprintf(stderr, "Error: Illegal prologue %p: %d\n", MOVE(start, -WSIZE), (int)GET(MOVE(start, -WSIZE)));
 //	DEBUG("Start scanning from heap range %p, to %p\n", start, mem_heap_hi() - WSIZE);
@@ -521,11 +534,12 @@ int mm_check(void) {
 	for (bp = start; (void*)bp < mem_heap_hi() - WSIZE; bp = NEXT_BLKP(bp)) {
 		int size = GET_SIZE(bp);
 //		DEBUG("(%p, %d)\n", bp, size);
+		// Check if the block data is 16B-aligned
 		if (((size_t) (bp -> data)) & 0xF) {
 			fprintf(stderr, "Error: Block %p, sized %d, alloc:%d not aligned to 16B\n", bp, (int)GET_SIZE(bp), GET_ALLOC(bp));
 			return 0;
 		}
-
+		// For a free block, check if it can be found in free list
 		if (size > 0 && !GET_ALLOC(bp)) {
 			int listno = find_list(size);
 			for (nbp = list_heads[listno]; nbp != NULL; nbp = nbp -> next)
@@ -537,15 +551,17 @@ int mm_check(void) {
 			}
 		}
 	}
+	//Check if the epilogue is correct
 	if (bp -> size != PACK(1, 1))
 		fprintf(stderr, "Error: Illegal epilogue %p: %d\n", bp, (int)bp->size);
 
-	// Out put a diagram for the current heap
+	// Output the memory locations in the current heap
 	DEBUG("Current heap:\n", 0);
 	int acc_addr = 0;
 	for (bp = start;  (void*)bp < mem_heap_hi() - WSIZE; bp = NEXT_BLKP(bp))
 		DEBUG("\t%d%c\t|", (int)GET_DATASIZE(bp), GET_ALLOC(bp)?'a':'f');
 	DEBUG("\n", 0);
+	// Output the memory offsets of the block boundaries
 	for (bp = start;  (void*)bp < mem_heap_hi() - WSIZE; bp = NEXT_BLKP(bp)) {
 		acc_addr += GET_SIZE(bp);
 		DEBUG("\t\t%d", acc_addr);
