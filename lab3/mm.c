@@ -99,7 +99,7 @@ typedef struct ablock_st{
 #define LAST_BLOCK (PREV_BLKP(mem_heap_hi() + 1 - WSIZE))
 
 /* Number of segregated lists */
-#define LIST_CNT 20
+#define LIST_CNT 19
 
 /* Debug output helpers */
 //#define DEBUG_MODE
@@ -113,7 +113,7 @@ typedef struct ablock_st{
 
 void *heap_listp = NULL;
 block* list_heads[LIST_CNT];
-const int list_size[LIST_CNT] = {10, 19, 67, 75, 115, 131, 451, 515, 4075, 4098, 6655, 8193, 11045, 15363, 19610, 23949, 28703, 147587, 303363, 459139};
+const int list_size[LIST_CNT] = {9, 18, 66, 74, 114, 130, 162, 450, 514, 1720, 4074, 4097, 5559, 8192, 11138, 15458, 19514, 23947, 28423};
 int cmd_cnt;
 int heap_starts;
 int chunksize;
@@ -200,7 +200,8 @@ void relocate_free_segment(block* bp, size_t size, int search_from) {
  **********************************************************/
 int mm_init(void) {
 //	freopen ("mm.log", "a", stderr);
-	freopen ("/dev/tty", "a", stderr);
+//	freopen ("/dev/tty", "a", stderr);
+//	freopen("size.log", "a", stderr);
 	cmd_cnt = 0;
 	chunksize = 8224;
 	if ((heap_listp = mem_sbrk(6 * WSIZE + LIST_CNT * EMPTY_BLOCKSIZE)) == (void *) -1)
@@ -389,6 +390,7 @@ void *mm_malloc(size_t size) {
 #ifdef RUN_MM_CHECK
 	mm_check();
 #endif
+//	fprintf(stderr, "%d\n", size);
 	DEBUG("mm_malloc %d @ %d -> ", size, ++cmd_cnt);
 	size_t asize; /* adjusted block size */
 	size_t extendsize; /* amount to extend heap if no fit */
