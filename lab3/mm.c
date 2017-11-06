@@ -42,7 +42,7 @@ team_t team = {
 #define WSIZE       sizeof(void *)            /* word size (bytes) */
 #define DSIZE       (2 * WSIZE)            /* doubleword size (bytes) */
 #define QSIZE       (4 * WSIZE)            /* quadword size (bytes) */
-#define CHUNKSIZE   (32768)      /* initial heap size (bytes) */
+#define MAXCHUNKSIZE   (32768)      /* initial heap size (bytes) */
 
 
 #define MAX(x, y) ((x) > (y)?(x) :(y))
@@ -116,6 +116,7 @@ block* list_heads[LIST_CNT];
 const int list_size[LIST_CNT] = {10, 19, 67, 75, 115, 131, 451, 515, 4075, 4098, 6655, 8193, 11045, 15363, 19610, 23949, 28703, 147587, 303363, 459139};
 int cmd_cnt;
 int heap_starts;
+int chunksize;
 
 void why(){
 	printf("WHY\n");
@@ -201,6 +202,7 @@ int mm_init(void) {
 //	freopen ("mm.log", "a", stderr);
 	freopen ("/dev/tty", "a", stderr);
 	cmd_cnt = 0;
+	chunksize = 8224;
 	if ((heap_listp = mem_sbrk(6 * WSIZE + LIST_CNT * EMPTY_BLOCKSIZE)) == (void *) -1)
 		return -1;
 	DEBUG("Init: allocate %d bytes, %p -> ", mem_heapsize(), heap_listp);
@@ -424,8 +426,9 @@ void *mm_malloc(size_t size) {
 //	if (++ext_cnt>=25)
 //		CHUNKSIZE = asize_sum;
 
-	extendsize = asize;
-	extendsize = MAX(extendsize, CHUNKSIZE);
+	if (asize > chunksize)
+		chunksize = MIN(MAXCHUNKSIZE, chunksize * 2);
+	extendsize = MAX(asize, chunksize);
 	if ((bp = extend_heap(extendsize / WSIZE)) == NULL)
 		return NULL;
 	void* ret = place(bp, asize, GET_SIZE(bp), LIST_CNT - 1, -1) -> data;
