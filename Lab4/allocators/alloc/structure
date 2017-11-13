@@ -1,0 +1,8 @@
+what data structures does the program layout?
+
+
+1. what does mem_init() do?
+2. What is sz exactly, size of memory requested?
+3. mm_malloc, entry to the program returns result which can be one of two options:
+	- subpage_kmalloc(sz): what does it do?
+	- big_kmalloc(sz): what does it do?

@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <assert.h>
 #include <pthread.h>
+#include <stdint.h>
 
 #include "memlib.h"
 #include "malloc.h"
@@ -27,546 +28,541 @@ name_t myname = {
 };
 
 
-typedef unsigned long vaddr_t;
-
-static
-void
-fill_deadbeef(void *vptr, size_t len)
-{
-	u_int32_t *ptr = vptr;
-	size_t i;
-
-	for (i=0; i<len/sizeof(u_int32_t); i++) {
-		ptr[i] = 0xdeadbeef;
-	}
-}
-
-////////////////////////////////////////////////////////////
-//
-// Pool-based subpage allocator.
-//
-// It works like this:
-//
-//    We allocate one page at a time and fill it with objects of size k,
-//    for various k. Each page has its own freelist, maintained by a
-//    linked list in the first word of each object. Each page also has a
-//    freecount, so we know when the page is completely free and can 
-//    recycle it.  We never return pages to the system, we just keep a 
-//    pool of completely empty pages that can be reused for a different 
-//    size.
-//
-//    No assumptions are made about the sizes k; they need not be
-//    powers of two (although in this implementation they are). 
-//    Note, however, that malloc must always return
-//    pointers aligned to the maximum alignment requirements of the
-//    platform; thus block sizes must at least be multiples of 8.
-//    They must also be at least sizeof(struct freelist).
-//
-//    The free counts and addresses of the pages are maintained in
-//    another list.  Maintaining this table is a nuisance, because it
-//    cannot recursively use the subpage allocator. (We could probably
-//    make that work, but it would be painful.)
-//
-
-#undef  SLOW	/* consistency checks */
-#undef SLOWER	/* lots of consistency checks */
-
-////////////////////////////////////////
-//test
-
-#define PAGE_SIZE  4096
-#define PAGE_FRAME 0xfffff000
-
-#define NSIZES 9
-static const size_t sizes[NSIZES] = { 8, 16, 32, 64, 128, 256, 512, 1024, 2048 };
-
-#define SMALLEST_SUBPAGE_SIZE 8
-#define LARGEST_SUBPAGE_SIZE 2048
-
-////////////////////////////////////////
-
-struct freelist {
-	struct freelist *next;
-};
-
-struct pageref {
-	struct pageref *next;
-	struct freelist *flist;
-	vaddr_t pageaddr_and_blocktype;
-	int nfree;
-};
-
-struct big_freelist {
-	int npages;
-	struct big_freelist *next;
-};
-
-#define INVALID_OFFSET   (0xffff)
-
-#define PR_PAGEADDR(pr)  ((pr)->pageaddr_and_blocktype & PAGE_FRAME)
-#define PR_BLOCKTYPE(pr) ((pr)->pageaddr_and_blocktype & ~PAGE_FRAME)
-#define MKPAB(pa, blk)   (((pa)&PAGE_FRAME) | ((blk) & ~PAGE_FRAME))
-
-////////////////////////////////////////
-
-/*
- * Unlike the OS/161 kheap, we can't just assign one page of 
- * pagerefs.  We need to be able to expand the size of the 
- * heap as demanded by the application.  
- *
- * Instead, we maintain several linked lists of pagerefs:
- * fresh_refs == never used, must obtain a page of memory
- *               along with the pageref
- * recycled_refs == pagerefs that refer to a completely empty
- *                  page of memory
- * sizebases == array of lists of pagerefs; each entry corresponds
- *              to a particular object size, and holds the list
- *              of in-use pagerefs for that size.
- *
- * We also have a special list for large allocations.
- */
-
-static struct pageref *fresh_refs; /* static global, initially 0 */
-static struct pageref *recycled_refs;
-static struct pageref *sizebases[NSIZES];
-static struct big_freelist *bigchunks;
-
-static
-struct pageref *
-allocpageref(void)
-{
-	struct pageref *ref;
-
-	/* Use a pageref that already has a page allocated,
-	 * if there are any.
-	 */
-	if (recycled_refs) {
-		ref = recycled_refs;
-		recycled_refs = recycled_refs->next;
-		return ref;
-	}
-
-	/* No recycled_refs, use fresh one, if there are any */
-	if (fresh_refs) {
-		ref = fresh_refs;
-		fresh_refs = fresh_refs->next;
-		return ref;
-	}
-
-	/* All out of pagerefs.  Initialize a new page worth by
-	 * getting a page with mem_sbrk()
-	 */
-
-	ref = (struct pageref *)mem_sbrk(PAGE_SIZE);
-	if (ref) {
-		bzero(ref, PAGE_SIZE);
-		fresh_refs = ref+1;
-		struct pageref *tmp = fresh_refs;
-		int nrefs = PAGE_SIZE / sizeof(struct pageref) - 1;
-		int i;
-		for (i = 0; i < nrefs-1; i++) {
-			tmp->next = tmp+1;
-			tmp = tmp->next;
-		}
-		tmp->next = NULL;
-	}
-	return ref;
-
-}
-
-static
-void
-freepageref(struct pageref *p)
-{
-	p->next = recycled_refs;
-	recycled_refs = p;
-}
-
-
-////////////////////////////////////////
-
-/* SLOWER implies SLOW */
-#ifdef SLOWER
-#ifndef SLOW
-#define SLOW
-#endif
-#endif
-
-#ifdef SLOW
-static
-void
-checksubpage(struct pageref *pr)
-{
-	vaddr_t prpage, fla;
-	struct freelist *fl;
-	int blktype;
-	int nfree=0;
-
-	if (pr->flist == NULL) {
-		assert(pr->nfree==0);
-		return;
-	}
-
-	prpage = PR_PAGEADDR(pr);
-	blktype = PR_BLOCKTYPE(pr);
-	
-
-	for (fl=pr->flist; fl != NULL; fl = fl->next) {
-		fla = (vaddr_t)fl;
-		assert(fla >= prpage && fla < prpage + PAGE_SIZE);
-		assert((fla-prpage) % sizes[blktype] == 0);
-		nfree++;
-	}
-	assert(nfree==pr->nfree);
-}
-#else
-#define checksubpage(pr) ((void)(pr))
-#endif
-
-#ifdef SLOWER
-static
-void
-checksubpages(void)
-{
-	struct pageref *pr;
-	int i;
-	unsigned sc=0;
-
-	for (i=0; i<NSIZES; i++) {
-		for (pr = sizebases[i]; pr != NULL; pr = pr->next) {
-			checksubpage(pr);
-			sc++;
-		}
-	}
-
-}
-#else
-#define checksubpages() 
-#endif
-
-////////////////////////////////////////
-
-static
-void
-remove_lists(struct pageref *pr, int blktype)
-{
-	struct pageref **guy;
-
-	assert(blktype>=0 && blktype<NSIZES);
-
-	for (guy = &sizebases[blktype]; *guy; guy = &(*guy)->next) {
-		checksubpage(*guy);
-		if (*guy == pr) {
-			*guy = pr->next;
-			break;
-		}
-	}
-
-}
-
-static
-inline
-int blocktype(size_t sz)
-{
-	unsigned i;
-	for (i=0; i<NSIZES; i++) {
-		if (sz <= sizes[i]) {
-			return i;
-		}
-	}
-
-	printf("Subpage allocator cannot handle allocation of size %lu\n", 
-	      (unsigned long)sz);
-	exit(1);
-
-	// keep compiler happy
-	return 0;
-}
-
-static
-void *
-subpage_kmalloc(size_t sz)
-{
-	unsigned blktype;	// index into sizes[] that we're using
-	struct pageref *pr;	// pageref for page we're allocating from
-	vaddr_t prpage;		// PR_PAGEADDR(pr)
-	vaddr_t fla;		// free list entry address
-	struct freelist *fl;	// free list entry
-	void *retptr;		// our result
-
-	volatile int i;
-
-
-	blktype = blocktype(sz);
-	sz = sizes[blktype];
-
-
-	checksubpages();
-
-	for (pr = sizebases[blktype]; pr != NULL; pr = pr->next) {
-
-		/* check for corruption */
-		assert(PR_BLOCKTYPE(pr) == blktype);
-		checksubpage(pr);
-
-		if (pr->nfree > 0) {
-
-		doalloc: /* comes here after getting a whole fresh page */
-
-			prpage = PR_PAGEADDR(pr);
-			fl = pr->flist;
-
-			retptr = pr->flist;
-			pr->flist = pr->flist->next;
-			pr->nfree--;
-
-			if (pr->flist != NULL) {
-				assert(pr->nfree > 0);
-				fla = (vaddr_t)fl;
-				assert(fla - prpage < PAGE_SIZE);
-			}
-			else {
-				assert(pr->nfree == 0);
-			}
-
-			checksubpages();
-			return retptr;
-		}
-	}
-
-	/*
-	 * No page of the right size available.
-	 * Make a new one.
-	 */
-
-	pr = allocpageref();
-	if (pr==NULL) {
-		/* Couldn't allocate accounting space for the new page. */
-		printf("malloc: Subpage allocator couldn't get pageref\n"); 
-		return NULL;
-	}
-
-	prpage = PR_PAGEADDR(pr);
-	if (prpage == 0) {
-		prpage = (vaddr_t)mem_sbrk(PAGE_SIZE);
-		if (prpage==0) {
-			/* Out of memory. */
-			freepageref(pr);
-			printf("malloc: Subpage allocator couldn't get a page\n"); 
-			return NULL;
-		}
-	}
-
-	pr->pageaddr_and_blocktype = MKPAB(prpage, blktype);
-	pr->nfree = PAGE_SIZE / sizes[blktype];
-
-	/* Build freelist */
-
-	fla = prpage;
-	fl = (struct freelist *)fla;
-	fl->next = NULL;
-	for (i=1; i<pr->nfree; i++) {
-		fl = (struct freelist *)(fla + i*sizes[blktype]);
-		fl->next = (struct freelist *)(fla + (i-1)*sizes[blktype]);
-		assert(fl != fl->next);
-	}
-	pr->flist = fl;
-	assert((vaddr_t)pr->flist == prpage+(pr->nfree-1)*sizes[blktype]);
-
-	pr->next = sizebases[blktype];
-	sizebases[blktype] = pr;
-
-
-	/* This is kind of cheesy, but avoids duplicating the alloc code. */
-	goto doalloc;
-}
-
-static
-int
-subpage_kfree(void *ptr)
-{
-	int blktype;		// index into sizes[] that we're using
-	vaddr_t ptraddr;	// same as ptr
-	struct pageref *pr=NULL;// pageref for page we're freeing in
-	vaddr_t prpage;		// PR_PAGEADDR(pr)
-	vaddr_t offset;		// offset into page
-	int i;
-
-	ptraddr = (vaddr_t)ptr;
-
-	checksubpages();
-
-	/* Nasty search to find the page that this block came from */
-
-	for (i=0; i < NSIZES && pr==NULL; i++) {
-		for (pr = sizebases[i]; pr; pr = pr->next) {
-			prpage = PR_PAGEADDR(pr);
-			blktype = PR_BLOCKTYPE(pr);
-
-			/* check for corruption */
-			assert(blktype>=0 && blktype<NSIZES);
-			checksubpage(pr);
-
-			if (ptraddr >= prpage && ptraddr < prpage + PAGE_SIZE) {
-				break;
-			}
-		}
-	}
-
-	if (pr==NULL) {
-		/* Not on any of our pages - not a subpage allocation */
-		return -1;
-	}
-
-	offset = ptraddr - prpage;
-
-	/* Check for proper positioning and alignment */
-	if (offset >= PAGE_SIZE || offset % sizes[blktype] != 0) {
-		printf("kfree: subpage free of invalid addr %p\n", ptr);
-		exit(1);
-	}
-
-	/*
-	 * Clear the block to 0xdeadbeef to make it easier to detect
-	 * uses of dangling pointers.
-	 */
-	fill_deadbeef(ptr, sizes[blktype]);
-
-	/*
-	 * We probably ought to check for free twice by seeing if the block
-	 * is already on the free list. But that's expensive, so we don't.
-	 */
-	((struct freelist *)ptr)->next = pr->flist;
-	pr->flist = (struct freelist *)ptr;
-	pr->nfree++;
-
-	assert(pr->nfree <= PAGE_SIZE / sizes[blktype]);
-	if (pr->nfree == PAGE_SIZE / sizes[blktype]) {
-		/* Whole page is free. */
-		remove_lists(pr, blktype);
-		freepageref(pr);
-	}
-
-	checksubpages();
-
-	return 0;
-}
-
-static void *big_kmalloc(int sz)
-{
-	/* Handle requests bigger than LARGEST_SUBPAGE_SIZE 
-	 * We simply round up to the nearest page-sized multiple
-	 * after adding some overhead space to hold the number of 
-	 * pages.
-	 */
-	
-	void *result = NULL;
-
-	sz += SMALLEST_SUBPAGE_SIZE;
-	/* Round up to a whole number of pages. */
-	int npages = (sz + PAGE_SIZE - 1)/PAGE_SIZE;
-
-	/* Check if we happen to have a chunk of the right size already */
-	struct big_freelist *tmp = bigchunks;
-	struct big_freelist *prev = NULL;
-	while (tmp != NULL) {
-		if (tmp->npages > npages) {
-			/* Carve the block in two pieces */
-			tmp->npages -= npages;
-			int *hdr_ptr = (int *)((char *)tmp+(tmp->npages*PAGE_SIZE));
-			*hdr_ptr = npages;
-			result = (void *)((char *)hdr_ptr + SMALLEST_SUBPAGE_SIZE);
-			break;
-		} else if (tmp->npages == npages) {
-			/* Remove block from freelist */
-			if (prev) {
-				prev->next = tmp->next;
-			} else {
-				bigchunks = tmp->next;
-			}
-			int *hdr_ptr = (int *)tmp;
-			assert(*hdr_ptr == npages);
-			result = (void *)((char *)hdr_ptr + SMALLEST_SUBPAGE_SIZE);
-			break;
-		} else {
-			prev = tmp;
-			tmp = tmp->next;
-		}
-	}
-
-	if (result == NULL) {
-		/* Nothing suitable in freelist... grab space with mem_sbrk */
-		int *hdr_ptr = (int *)mem_sbrk(npages*PAGE_SIZE);
-		if (hdr_ptr != NULL) {
-			*hdr_ptr = npages;
-			result = (void *)((char *)hdr_ptr + SMALLEST_SUBPAGE_SIZE);
-		}
-	}
-
-	return result;
-}
-
-static void big_kfree(void *ptr)
-{
-	/* Coalescing is unlikely to do much good (other page allocations
-	 * for small objects are likely to prevent big chunks from fitting
-	 * together), so we don't bother trying.
-	 */
-
-	int *hdr_ptr = (int *)((char *)ptr - SMALLEST_SUBPAGE_SIZE);
-	//int npages = *hdr_ptr;
-
-	struct big_freelist *newfree = (struct big_freelist *) hdr_ptr;
-	assert(newfree->npages == *hdr_ptr);
-	newfree->next = bigchunks;
-	bigchunks = newfree;
-}
-
-//
-////////////////////////////////////////////////////////////
-
+/*************************************************************************
+ * Basic Constants and Macros
+ * You are not required to use these macros but may find them helpful.
+*************************************************************************/
 pthread_mutex_t malloc_lock = PTHREAD_MUTEX_INITIALIZER;
+#define WSIZE       sizeof(void *)            /* word size (bytes) */
+#define DSIZE       (2 * WSIZE)            /* doubleword size (bytes) */
+#define QSIZE       (4 * WSIZE)            /* quadword size (bytes) */
+#define MAXCHUNKSIZE   (32768)      /* maximal heap chunk size (bytes) */
 
-int mm_init(void)
-{
-	if (dseg_lo == NULL && dseg_hi == NULL) {
-		return mem_init();
-	}
-	return 0;
+
+#define MAX(x, y) ((x) > (y)?(x) :(y))
+#define MIN(x, y) ((x) < (y)?(x) :(y))
+
+/* Pack a size and allocated bit into a word */
+#define PACK(size, alloc) ((size) | (alloc))
+
+/* Read and write a word at address p */
+#define GET(p)          (*(uintptr_t *)(p))
+#define PUT(p, val)      (*(uintptr_t *)(p) = (val))
+
+/* Move a pointer pt by offset bytes */
+#define MOVE(pt, offset) (((void*)(pt)) + (offset))
+
+/* Align the size */
+#define ALIGN_16B(size) (((size)&15LL)?(((size)|15LL)+1):(size))
+#define ALIGN_4K(size) (((size)&4095LL)?(((size)|4095LL)+1):(size))
+
+/* Free block structure */
+typedef struct block_st{
+    size_t size;
+    struct block_st* prev;
+    struct block_st* next;
+    char data[0];
+} block;
+
+/* Allocated block structure */
+typedef struct ablock_st{
+    size_t size;
+    char data[0];
+} ablock;
+// Footer can not be accessed directly without using the macro below
+
+/* Size of an empty free block */
+#define EMPTY_BLOCKSIZE  (QSIZE)
+
+/* Read the size and allocated fields from address p */
+#define GET_SIZE(p)     ((size_t)((((block*)(p)) -> size) & ~(DSIZE - 1)))
+#define GET_ALLOC(p)    ((int)((((block*)(p)) -> size) & 0x1))
+
+/* Size of payload of an allocated block p */
+#define GET_DATASIZE(abp)     (GET_SIZE(abp) - DSIZE)
+
+/* Given block ptr bp, compute address of its header and footer */
+#define FTRP(bp)        ((size_t*)(MOVE(bp, GET_SIZE(bp) - WSIZE)))
+
+/* Given pointer to data of an allocated block, return a pointer to the block */
+#define DATA2BLOCK(ptr) ((ablock*)(MOVE(ptr, -sizeof(ablock))))
+
+/* Given block ptr bp, compute address of next and previous blocks */
+#define NEXT_BLKP(bp) ((block*)MOVE(bp, GET_SIZE(bp)))
+#define PREV_BLKP(bp) ((block*)MOVE(bp, -GET_SIZE(MOVE(bp, -WSIZE))))
+
+/* Set the footer of a block pointer pt */
+#define SET_FOOTER(pt) ({PUT(FTRP(pt), ((block*) (pt)) -> size);})
+
+/* Last block in the heap */
+#define LAST_BLOCK (PREV_BLKP(*dseg_hi + 1 - WSIZE))
+
+/* Number of segregated lists */
+#define LIST_CNT 19
+
+/* Debug output helpers */
+//#define DEBUG_MODE
+
+#ifdef DEBUG_MODE
+#define DEBUG(f, ...) (fprintf(stderr, (f), __VA_ARGS__))
+#define RUN_MM_CHECK
+#else
+#define DEBUG(f, ...) (0)
+#endif
+
+/* Head nodes of segregated lists */
+block* list_heads[LIST_CNT];
+/* Block size constraint of each list */
+const int list_size[LIST_CNT] = {23, 32, 80, 88, 128, 144, 176, 464, 528, 1734, 4088, 4111, 5573, 8206, 11152, 15472, 19528, 23961, 28437};
+
+/* Minimum size each time heap break increases */
+int chunksize;
+
+/* Used for logging */
+int cmd_cnt;
+int heap_starts;
+
+/**********************************************************
+ * list_insert
+ * Insert the free block bp to the free address-ordered list list_no
+ **********************************************************/
+void list_insert(block* bp, int list_no) {
+    block* pos = list_heads[list_no];
+    /* Find the appropriate position to insert the node */
+    while (pos->next && pos->next < bp)
+        pos = pos->next;
+    if (pos -> next) {
+        pos -> next -> prev = bp;
+        bp -> next = pos -> next;
+    }
+    else bp -> next = NULL;
+    pos -> next = bp;
+    bp -> prev = pos;
 }
 
-void *
-mm_malloc(size_t sz)
-{
-	void *result;
-
-	pthread_mutex_lock(&malloc_lock);
-
-	if (sz>=LARGEST_SUBPAGE_SIZE) {
-		result = big_kmalloc(sz);
-	} else {
-		result = subpage_kmalloc(sz);
-	}
-
-	pthread_mutex_unlock(&malloc_lock);
-
-	return result;
+/**********************************************************
+ * list_remove
+ * Remove the block bp from free list
+ **********************************************************/
+void list_remove(block* bp) {
+    if (bp -> prev)
+        bp -> prev -> next = bp -> next;
+    if (bp -> next)
+        bp -> next -> prev = bp -> prev;
+    bp -> prev = bp -> next = NULL;
 }
 
-void
-mm_free(void *ptr)
-{
-	/*
-	 * Try subpage first; if that fails, assume it's a big allocation.
-	 */
-	if (ptr == NULL) {
-		return;
-	} else {
-	  pthread_mutex_lock(&malloc_lock);
-	  if (subpage_kfree(ptr)) {
-		  big_kfree(ptr);
-	  }
-	  pthread_mutex_unlock(&malloc_lock);
-	}
+/**********************************************************
+ * find_list
+ * Find the appropriate list for a block sized asize
+ **********************************************************/
+int find_list(size_t asize) {
+    int i;
+    /* List #0 also stores the blocks < list_size[0] */
+    if (asize <= list_size[0])
+        return 0;
+    for (i=LIST_CNT - 1; i>=0; i--)
+        if (asize >= list_size[i])
+            return i;
+    return LIST_CNT - 1;
 }
 
+/**********************************************************
+ * relocate_free_segment
+ * Build up a free block from a free segment at bp sized size
+ * Assume that the size <= list_size[search_from]
+ * search_from is used to accelerate the search if some extra
+ * information is known.
+ **********************************************************/
+void relocate_free_segment(block* bp, size_t size, int search_from) {
+    int i;
+    bp->size = size;
+    SET_FOOTER(bp);
+    for (i=search_from; i > 0; --i) {
+        if (size >= list_size[i])
+            break;
+    }
+    list_insert(bp, i);
+}
+
+/**********************************************************
+ * mm_init
+ * Initialize the heap, including "allocation" of the
+ * prologue and epilogue
+ **********************************************************/
+int mm_init(void) {
+//	freopen ("mm.log", "a", stderr);
+//	freopen ("/dev/tty", "a", stderr);
+//	freopen("size.log", "a", stderr);
+
+    mem_init();
+
+    void* heap_listp;
+    cmd_cnt = 0;
+    // Initial chunk size
+    chunksize = 8224;
+    // Make up the space for list heads, prologue & epilogue
+    if ((heap_listp = mem_sbrk(6 * WSIZE + LIST_CNT * EMPTY_BLOCKSIZE)) == (void *) -1)
+        return -1;
+    DEBUG("Init: allocate %d bytes, %p -> ", mem_heapsize(), heap_listp);
+    block* pt = heap_listp;
+    // Set up an empty block as the head (sentinel) node of each segregated list
+    for (int i=0; i < LIST_CNT; ++i) {
+        pt -> prev = NULL;
+        pt -> next = NULL;
+        pt -> size = PACK(EMPTY_BLOCKSIZE, 0); // sentinel header
+        SET_FOOTER(pt); // sentinel footer
+        list_heads[i] = pt;
+        pt = MOVE(pt, EMPTY_BLOCKSIZE);
+    }
+    pt = MOVE(pt, WSIZE);
+    pt -> prev = NULL;
+    pt -> next = NULL;
+    pt -> size = PACK(EMPTY_BLOCKSIZE, 1); // prologue header
+    SET_FOOTER(pt); // prologue footer
+    pt = MOVE(pt, EMPTY_BLOCKSIZE);
+    heap_starts = MOVE(pt, WSIZE);
+    pt -> size = PACK(1, 1); // epilogue header
+    DEBUG("%p\n", MOVE(pt, WSIZE));
+    return 0;
+}
+
+/**********************************************************
+ * coalesce
+ * Covers the 4 cases discussed in the text:
+ * - both neighbours are allocated
+ * - the next block is available for coalescing
+ * - the previous block is available for coalescing
+ * - both neighbours are available for coalescing
+ **********************************************************/
+void *coalesce(block *bp) {
+    int prev_alloc = GET_ALLOC(PREV_BLKP(bp));
+    int next_alloc = GET_ALLOC(NEXT_BLKP(bp));
+    size_t size = GET_SIZE(bp);
+    if (prev_alloc && next_alloc) {       /* Case 1 */
+        return bp;
+    } else if (prev_alloc && !next_alloc) { /* Case 2 */
+        size += GET_SIZE(NEXT_BLKP(bp));
+        list_remove(bp);
+        list_remove((NEXT_BLKP(bp)));
+    } else if (!prev_alloc && next_alloc) { /* Case 3 */
+        size += GET_SIZE(PREV_BLKP(bp));
+        list_remove(bp);
+        list_remove(PREV_BLKP(bp));
+        bp = PREV_BLKP(bp);
+    } else {            /* Case 4 */
+        size += GET_SIZE(PREV_BLKP(bp)) +
+                GET_SIZE(NEXT_BLKP(bp));
+        list_remove(bp);
+        list_remove(PREV_BLKP(bp));
+        list_remove(NEXT_BLKP(bp));
+        bp = PREV_BLKP(bp);
+    }
+    relocate_free_segment(bp, size, LIST_CNT - 1); // Set up block for the new coalesced free segment
+    return bp;
+}
+
+/**********************************************************
+ * extend_heap
+ * Extend the heap by "words" words, maintaining alignment
+ * requirements of course. Free the former epilogue block
+ * and reallocate its new header
+ **********************************************************/
+block* extend_heap(size_t words) {
+    block *bp;
+    size_t size;
+
+    /* Allocate an even number of words to maintain alignments */
+    size = (words % 2) ? (words + 1) * WSIZE : words * WSIZE;
+    if ((bp = mem_sbrk(size)) == (void *) -1)
+        return NULL;
+    bp = MOVE(bp, -WSIZE); // Remove old epilogue header
+
+    /* Initialize free block header/footer and the epilogue header */
+    bp -> size = PACK(size, 0);                  // free block header
+    SET_FOOTER(bp);               // free block footer
+
+    list_insert(bp, find_list(bp->size));
+
+    NEXT_BLKP(bp) -> size = PACK(1, 1); // Set new epilogue footer
+
+    /* Coalesce if the previous block was free */
+    return coalesce(bp);
+}
+
+
+/**********************************************************
+ * find_fit
+ * Traverse the free list listp searching for a block to fit asize
+ * Return NULL if no free blocks can handle that size
+ * Assumed that asize is aligned
+ **********************************************************/
+block *find_fit(size_t asize, block* listp) {
+#ifdef BEST_FIT
+    block *bp, *ret = NULL;
+	int sized;
+	/* Starting from the first "real" block in the list */
+	for (bp = listp -> next; bp != NULL; bp = bp -> next) {
+		if (!GET_ALLOC(bp) && (asize <= GET_SIZE(bp))) {
+			if (ret == NULL || GET_SIZE(bp) - asize < sized) {
+				sized = GET_SIZE(bp) - asize;
+				ret = bp;
+			}
+		}
+	}
+	return ret;
+#else
+    // use first fit method as default
+    block *bp;
+    /* Starting from the first "real" block in the list */
+    for (bp = listp -> next; bp != NULL; bp = bp -> next) {
+        if (!GET_ALLOC(bp) && (asize <= GET_SIZE(bp)))
+            return bp;
+    }
+    return NULL;
+#endif
+}
+
+/**********************************************************
+ * place
+ * Split a block sized asize from block bp with size free_size, located on list# <= listno
+ * des_direction: specify whether split the upper part(1) or lower part(0) of the block
+ * -1: split in alternative ways
+ **********************************************************/
+ablock* place(block* bp, int asize, int free_size, int listno, int des_direction) {
+    if (free_size - asize <= EMPTY_BLOCKSIZE) // If the remaining space after the split could not hold a block
+        asize = free_size;
+    list_remove(bp);
+    static char rec_direction = 0;
+    char direction = des_direction == -1? rec_direction : des_direction;
+    if (direction == 0) { // Split the block from the lower address
+        bp -> size = PACK(asize, 1);
+        SET_FOOTER(bp);
+        if (free_size > asize) {
+            block* rem = NEXT_BLKP(bp);
+            relocate_free_segment(rem, free_size - asize, listno);
+        }
+    }
+    else { // Split the block from the upper address
+        block* rem = bp;
+        PUT(MOVE(NEXT_BLKP(bp), -WSIZE), PACK(asize, 1));
+        bp = PREV_BLKP(NEXT_BLKP(bp));
+        bp -> size = PACK(asize, 1);
+        if (free_size > asize)
+            relocate_free_segment(rem, free_size - asize, listno);
+    }
+    rec_direction ^= 1; // Direction changes next time
+    return (ablock*)bp;
+}
+
+/**********************************************************
+ * mm_free
+ * Free the block and coalesce with neighbouring blocks
+ **********************************************************/
+void mm_free(void* ptr) {
+#ifdef RUN_MM_CHECK
+    mm_check();
+#endif
+    DEBUG("mm_free %d(%p) @ %d\n", (int)(ptr - heap_starts), ptr, ++cmd_cnt);
+    pthread_mutex_lock(&malloc_lock);
+    if (ptr == NULL) {
+        return;
+    }
+    block* bp = DATA2BLOCK((block *)ptr);
+    bp -> size = GET_SIZE(bp);
+    SET_FOOTER(bp);
+    // prev and next of an allocated block should be overlapped by data
+    bp->next = NULL;
+    bp->prev = NULL;
+    list_insert(bp, find_list(bp->size));
+    coalesce(bp);
+    pthread_mutex_unlock(&malloc_lock);
+}
+
+/**********************************************************
+ * mm_malloc
+ * Allocate a block of size bytes.
+ * The type of search is determined by find_fit
+ * The decision of splitting the block, or not is determined
+ *   in place(...)
+ * If no block satisfies the request, the heap is extended
+ **********************************************************/
+void *mm_malloc(size_t size) {
+    pthread_mutex_lock(&malloc_lock);
+#ifdef RUN_MM_CHECK
+    mm_check();
+#endif
+    DEBUG("mm_malloc %d @ %d -> ", size, ++cmd_cnt);
+    //pthread_mutex_lock(&malloc_lock);
+    size_t asize; /* adjusted block size */
+    size_t extendsize; /* amount to extend heap if no fit */
+    block *bp;
+    int list_no, n_list_no;
+
+    /* Ignore spurious requests */
+    if (size == 0)
+        return NULL;
+
+    /* Adjust block size to include overhead and alignment reqs. */
+    asize = ALIGN_16B(size + DSIZE);
+
+    /* Find the appropriate list to start to search for a fit free block */
+    list_no = find_list(asize);
+    for (n_list_no = list_no; n_list_no < LIST_CNT; ++n_list_no)
+        /* Search the free list for a fit */
+        if ((bp = find_fit(asize, list_heads[n_list_no])) != NULL) {
+            void* ret = place(bp, asize, GET_SIZE(bp), n_list_no, -1)->data;
+            DEBUG("%d(%p)\n", (int)(ret - heap_starts), ret);
+            pthread_mutex_unlock(&malloc_lock);
+            return ret;
+        }
+
+    /* No fit found. Get more memory and place the block */
+//	if (!GET_ALLOC(LAST_BLOCK))
+//		extendsize -= GET_SIZE(LAST_BLOCK);
+
+//	static int asize_rec[25] = {0};
+//	static int asize_pt = 0;
+//	static int ext_cnt = 0;
+//	static int asize_sum = 0;
+
+//	asize_sum = asize_sum - asize_rec[asize_pt] + asize;
+//	asize_rec[asize_pt] = asize;
+//	asize_pt = (asize_pt + 1) % 25;
+//	if (++ext_cnt>=25)
+//		CHUNKSIZE = asize_sum;
+
+    // Adjust the chunk size adaptively
+    if (asize > chunksize)
+        chunksize = MIN(MAXCHUNKSIZE, chunksize * 2);
+
+    extendsize = MAX(asize, chunksize);
+    if ((bp = extend_heap(extendsize / WSIZE)) == NULL)
+        return NULL;
+    void* ret = place(bp, asize, GET_SIZE(bp), LIST_CNT - 1, -1) -> data;
+    DEBUG("%d(%p)\n", (int)(ret - heap_starts), ret);
+    //pthread_mutex_unlock(&malloc_lock);
+    pthread_mutex_unlock(&malloc_lock);
+    return ret;
+}
+
+/**********************************************************
+ * mm_realloc
+ * Implemented simply in terms of mm_malloc and mm_free
+ *********************************************************/
+void *mm_realloc(void *ptr, size_t size) {
+    /* If size == 0 then this is just free, and we return NULL. */
+#ifdef RUN_MM_CHECK
+    mm_check();
+#endif
+    DEBUG("mm_realloc %d(%p) to size %d @ %d\n", (int)(ptr - heap_starts), ptr, size, ++cmd_cnt);
+    --cmd_cnt;
+    if (size == 0) {
+        mm_free(ptr);
+        return NULL;
+    }
+    /* If oldptr is NULL, then this is just malloc. */
+    if (ptr == NULL)
+        return (mm_malloc(size));
+
+    ablock *bp = DATA2BLOCK(ptr);
+    int asize = ALIGN_16B(size + DSIZE);
+    // Coalesce with next empty block
+    if (!GET_ALLOC(NEXT_BLKP(bp))) {
+        list_remove(NEXT_BLKP(bp));
+        bp -> size = PACK(GET_SIZE(bp) + GET_SIZE(NEXT_BLKP(bp)), 1);
+        SET_FOOTER(bp);
+    }
+    // Try to split the current block
+    if (GET_SIZE(bp) >= asize) {
+        ++cmd_cnt;
+        return place(bp, asize, GET_SIZE(bp), LIST_CNT - 1, 0)->data;
+    }
+
+    // When we have to allocate a new block
+    ablock* newptr = DATA2BLOCK(mm_malloc(size));
+    if (newptr == NULL)
+        return NULL;
+
+    /* Copy the old data. */
+    memcpy(newptr -> data, bp -> data, MIN(GET_DATASIZE(bp), size));
+    --cmd_cnt;
+    mm_free(bp->data);
+    DEBUG("realloc %d(%p) -> return %d(%p) size %d\n", (int)(ptr - heap_starts), ptr, (int)((void*)newptr - heap_starts), newptr, size);
+    return newptr -> data;
+}
+
+/**********************************************************
+ * mm_check
+ * Check the consistency of the memory heap
+ * Return nonzero if the heap is consistant.
+ *********************************************************/
+int mm_check(void) {
+    block* start = *dseg_lo + 5*WSIZE + LIST_CNT * EMPTY_BLOCKSIZE;
+    block *bp, *nbp;
+    // Traverse all the free lists
+    for (int i = 0; i < LIST_CNT; ++i)
+        // Traverse the blocks in the free list
+        for (nbp = list_heads[i] -> next; nbp != NULL; nbp = nbp -> next) {
+            // Check if the block is free
+            if (GET_ALLOC(nbp)) {
+                fprintf(stderr, "Error: Block %p sized %d in free list %d is allocated\n", nbp, (int)GET_SIZE(nbp), i);
+                return 0;
+            }
+            // Check if the size of the block fits the list
+            if ((i != 0 && GET_SIZE(nbp) < list_size[i]) || (i != LIST_CNT - 1 && GET_SIZE(nbp) >= list_size[i+1] )) {
+                fprintf(stderr, "Error: Block %p sized %d stored free list for size %d\n", nbp, (int)GET_SIZE(nbp), list_size[i]);
+                return 0;
+            }
+            // Check if the block presents in the implicit list (linked in the heap by sizes)
+            for (bp = start; (void*)bp < *dseg_hi - WSIZE; bp = NEXT_BLKP(bp))
+                if (bp == nbp)
+                    break;
+            if ((void*)bp > *dseg_hi) {
+                fprintf(stderr, "Error: Block %p sized %d in free list %d could not be found in contiguity list\n", nbp, (int)GET_SIZE(nbp), i);
+                return 0;
+            }
+        }
+    // Check if the prologue is correct
+    if (GET(MOVE(start, -WSIZE)) != PACK(EMPTY_BLOCKSIZE, 1))
+        fprintf(stderr, "Error: Illegal prologue %p: %d\n", MOVE(start, -WSIZE), (int)GET(MOVE(start, -WSIZE)));
+//	DEBUG("Start scanning from heap range %p, to %p\n", start, mem_heap_hi() - WSIZE);
+    // Traverse through the heap
+    for (bp = start; (void*)bp < *dseg_hi - WSIZE; bp = NEXT_BLKP(bp)) {
+        int size = GET_SIZE(bp);
+//		DEBUG("(%p, %d)\n", bp, size);
+        // Check if the block data is 16B-aligned
+        if (((size_t) (bp -> data)) & 0xF) {
+            fprintf(stderr, "Error: Block %p, sized %d, alloc:%d not aligned to 16B\n", bp, (int)GET_SIZE(bp), GET_ALLOC(bp));
+            return 0;
+        }
+        // For a free block, check if it can be found in free list
+        if (size > 0 && !GET_ALLOC(bp)) {
+            int listno = find_list(size);
+            for (nbp = list_heads[listno]; nbp != NULL; nbp = nbp -> next)
+                if (nbp == bp)
+                    break ;
+            if (nbp == NULL) {
+                fprintf(stderr, "Error: Block %p, sized %d could not be found in list %d\n", bp, size, listno);
+                return 0;
+            }
+        }
+    }
+    //Check if the epilogue is correct
+    if (bp -> size != PACK(1, 1))
+        fprintf(stderr, "Error: Illegal epilogue %p: %d\n", bp, (int)bp->size);
+
+    // Output the memory locations in the current heap
+    DEBUG("Current heap:\n", 0);
+    int acc_addr = 0;
+    for (bp = start;  (void*)bp < *dseg_hi - WSIZE; bp = NEXT_BLKP(bp))
+        DEBUG("\t%d%c\t|", (int)GET_DATASIZE(bp), GET_ALLOC(bp)?'a':'f');
+    DEBUG("\n", 0);
+    // Output the memory offsets of the block boundaries
+    for (bp = start;  (void*)bp < *dseg_hi - WSIZE; bp = NEXT_BLKP(bp)) {
+        acc_addr += GET_SIZE(bp);
+        DEBUG("\t\t%d", acc_addr);
+    }
+    DEBUG("\n\n", 0);
+    return 1;
+}
