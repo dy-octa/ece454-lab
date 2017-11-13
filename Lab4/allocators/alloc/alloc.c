@@ -95,7 +95,7 @@ typedef struct ablock_st{
 #define SET_FOOTER(pt) ({PUT(FTRP(pt), ((block*) (pt)) -> size);})
 
 /* Last block in the heap */
-#define LAST_BLOCK (PREV_BLKP(*dseg_hi + 1 - WSIZE))
+#define LAST_BLOCK (PREV_BLKP(dseg_hi + 1 - WSIZE))
 
 /* Number of segregated lists */
 #define LIST_CNT 19
@@ -104,7 +104,7 @@ typedef struct ablock_st{
 #define DEBUG_MODE
 
 #ifdef DEBUG_MODE
-#define DEBUG(f, ...) (fprintf(stderr, (f), __VA_ARGS__), fflush(stderr))
+#define DEBUG(f, ...) (fprintf(stderr, (f), __VA_ARGS__))
 #define RUN_MM_CHECK
 #else
 #define DEBUG(f, ...) (0)
@@ -192,9 +192,9 @@ void relocate_free_segment(block* bp, size_t size, int search_from) {
  **********************************************************/
 int mm_init(void) {
 //	freopen ("mm.log", "a", stderr);
-//	freopen ("/dev/tty", "a", stderr);
+	freopen ("/dev/tty", "a", stderr);
 //	freopen("size.log", "a", stderr);
-
+	DEBUG("Starting mm_init..\n", 0);
     mem_init();
 
     void* heap_listp;
@@ -204,7 +204,7 @@ int mm_init(void) {
     // Make up the space for list heads, prologue & epilogue
     if ((heap_listp = mem_sbrk(6 * WSIZE + LIST_CNT * EMPTY_BLOCKSIZE)) == (void *) -1)
         return -1;
-//    DEBUG("Init: allocate %d bytes, %p -> ", mem_heapsize(), heap_listp);
+    DEBUG("Init: allocate %d bytes, %p -> ", mem_usage(), heap_listp);
     block* pt = heap_listp;
     // Set up an empty block as the head (sentinel) node of each segregated list
     for (int i=0; i < LIST_CNT; ++i) {
@@ -224,6 +224,7 @@ int mm_init(void) {
     heap_starts = MOVE(pt, WSIZE);
     pt -> size = PACK(1, 1); // epilogue header
 //    DEBUG("%p\n", MOVE(pt, WSIZE));
+	DEBUG("Exiting mm_init..\n", 0);
     return 0;
 }
 
@@ -444,7 +445,7 @@ void *mm_malloc(size_t size) {
     size_t asize = ALIGN_16B(size + DSIZE);
 	pthread_t th;
 	void* exit_status;
-	pthread_create(&th, NULL,mm_free_thread, &asize);
+	pthread_create(&th, NULL,mm_malloc_thread, &asize);
 	pthread_join(th, &exit_status);
 	DEBUG("In mm_malloc: ret=%p\n", exit_status);
 	return exit_status;
@@ -456,7 +457,7 @@ void *mm_malloc(size_t size) {
  * Return nonzero if the heap is consistant.
  *********************************************************/
 int mm_check(void) {
-    block* start = *dseg_lo + 5*WSIZE + LIST_CNT * EMPTY_BLOCKSIZE;
+    block* start = dseg_lo + 5*WSIZE + LIST_CNT * EMPTY_BLOCKSIZE;
     block *bp, *nbp;
     // Traverse all the free lists
     for (int i = 0; i < LIST_CNT; ++i)
@@ -473,10 +474,10 @@ int mm_check(void) {
                 return 0;
             }
             // Check if the block presents in the implicit list (linked in the heap by sizes)
-            for (bp = start; (void*)bp < *dseg_hi - WSIZE; bp = NEXT_BLKP(bp))
+            for (bp = start; (void*)bp < dseg_hi - WSIZE; bp = NEXT_BLKP(bp))
                 if (bp == nbp)
                     break;
-            if ((void*)bp > *dseg_hi) {
+            if ((void*)bp > dseg_hi) {
                 fprintf(stderr, "Error: Block %p sized %d in free list %d could not be found in contiguity list\n", nbp, (int)GET_SIZE(nbp), i);
                 return 0;
             }
@@ -486,7 +487,7 @@ int mm_check(void) {
         fprintf(stderr, "Error: Illegal prologue %p: %d\n", MOVE(start, -WSIZE), (int)GET(MOVE(start, -WSIZE)));
 //	DEBUG("Start scanning from heap range %p, to %p\n", start, mem_heap_hi() - WSIZE);
     // Traverse through the heap
-    for (bp = start; (void*)bp < *dseg_hi - WSIZE; bp = NEXT_BLKP(bp)) {
+    for (bp = start; (void*)bp < dseg_hi - WSIZE; bp = NEXT_BLKP(bp)) {
         int size = GET_SIZE(bp);
 //		DEBUG("(%p, %d)\n", bp, size);
         // Check if the block data is 16B-aligned
@@ -513,11 +514,11 @@ int mm_check(void) {
     // Output the memory locations in the current heap
     DEBUG("Current heap:\n", 0);
     int acc_addr = 0;
-    for (bp = start;  (void*)bp < *dseg_hi - WSIZE; bp = NEXT_BLKP(bp))
+    for (bp = start;  (void*)bp < dseg_hi - WSIZE; bp = NEXT_BLKP(bp))
         DEBUG("\t%d%c\t|", (int)GET_DATASIZE(bp), GET_ALLOC(bp)?'a':'f');
     DEBUG("\n", 0);
     // Output the memory offsets of the block boundaries
-    for (bp = start;  (void*)bp < *dseg_hi - WSIZE; bp = NEXT_BLKP(bp)) {
+    for (bp = start;  (void*)bp < dseg_hi - WSIZE; bp = NEXT_BLKP(bp)) {
         acc_addr += GET_SIZE(bp);
         DEBUG("\t\t%d", acc_addr);
     }
