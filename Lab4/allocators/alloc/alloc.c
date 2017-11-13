@@ -101,10 +101,10 @@ typedef struct ablock_st{
 #define LIST_CNT 19
 
 /* Debug output helpers */
-//#define DEBUG_MODE
+#define DEBUG_MODE
 
 #ifdef DEBUG_MODE
-#define DEBUG(f, ...) (fprintf(stderr, (f), __VA_ARGS__))
+#define DEBUG(f, ...) (fprintf(stderr, (f), __VA_ARGS__), fflush(stderr))
 #define RUN_MM_CHECK
 #else
 #define DEBUG(f, ...) (0)
@@ -204,7 +204,7 @@ int mm_init(void) {
     // Make up the space for list heads, prologue & epilogue
     if ((heap_listp = mem_sbrk(6 * WSIZE + LIST_CNT * EMPTY_BLOCKSIZE)) == (void *) -1)
         return -1;
-    DEBUG("Init: allocate %d bytes, %p -> ", mem_heapsize(), heap_listp);
+//    DEBUG("Init: allocate %d bytes, %p -> ", mem_heapsize(), heap_listp);
     block* pt = heap_listp;
     // Set up an empty block as the head (sentinel) node of each segregated list
     for (int i=0; i < LIST_CNT; ++i) {
@@ -223,7 +223,7 @@ int mm_init(void) {
     pt = MOVE(pt, EMPTY_BLOCKSIZE);
     heap_starts = MOVE(pt, WSIZE);
     pt -> size = PACK(1, 1); // epilogue header
-    DEBUG("%p\n", MOVE(pt, WSIZE));
+//    DEBUG("%p\n", MOVE(pt, WSIZE));
     return 0;
 }
 
@@ -355,6 +355,22 @@ ablock* place(block* bp, int asize, int free_size, int listno, int des_direction
     return (ablock*)bp;
 }
 
+void* mm_free_thread(void* args) {
+	void* ptr = args;
+	DEBUG("In mm_free_thread, ptr=%p\n", ptr);
+	pthread_mutex_lock(&malloc_lock);
+	block* bp = DATA2BLOCK((block *)ptr);
+	bp -> size = GET_SIZE(bp);
+	SET_FOOTER(bp);
+	// prev and next of an allocated block should be overlapped by data
+	bp->next = NULL;
+	bp->prev = NULL;
+	list_insert(bp, find_list(bp->size));
+	coalesce(bp);
+	pthread_mutex_unlock(&malloc_lock);
+	return NULL;
+}
+
 /**********************************************************
  * mm_free
  * Free the block and coalesce with neighbouring blocks
@@ -364,19 +380,48 @@ void mm_free(void* ptr) {
     mm_check();
 #endif
     DEBUG("mm_free %d(%p) @ %d\n", (int)(ptr - heap_starts), ptr, ++cmd_cnt);
-    pthread_mutex_lock(&malloc_lock);
     if (ptr == NULL) {
         return;
     }
-    block* bp = DATA2BLOCK((block *)ptr);
-    bp -> size = GET_SIZE(bp);
-    SET_FOOTER(bp);
-    // prev and next of an allocated block should be overlapped by data
-    bp->next = NULL;
-    bp->prev = NULL;
-    list_insert(bp, find_list(bp->size));
-    coalesce(bp);
-    pthread_mutex_unlock(&malloc_lock);
+	pthread_t th;
+	void* exit_status;
+	pthread_create(&th, NULL, mm_free_thread, ptr);
+	pthread_join(th, &exit_status);
+}
+
+void* mm_malloc_thread(void* args) {
+	size_t extendsize; /* amount to extend heap if no fit */
+	block *bp;
+	int list_no, n_list_no;
+	size_t asize = *((size_t*)args); /* adjusted block size */
+	DEBUG("In mm_malloc_thread, asize=%d\n", asize);
+	pthread_mutex_lock(&malloc_lock);
+	/* Find the appropriate list to start to search for a fit free block */
+	list_no = find_list(asize);
+	for (n_list_no = list_no; n_list_no < LIST_CNT; ++n_list_no)
+		/* Search the free list for a fit */
+		if ((bp = find_fit(asize, list_heads[n_list_no])) != NULL) {
+			void* ret = place(bp, asize, GET_SIZE(bp), n_list_no, -1)->data;
+			DEBUG("%d(%p)\n", (int)(ret - heap_starts), ret);
+			pthread_mutex_unlock(&malloc_lock);
+			DEBUG("In mm_malloc_thread: ret=%p\n", ret);
+			return ret;
+		}
+
+	/* No fit found. Get more memory and place the block */
+	// Adjust the chunk size adaptively
+	if (asize > chunksize)
+		chunksize = MIN(MAXCHUNKSIZE, chunksize * 2);
+
+	extendsize = MAX(asize, chunksize);
+	if ((bp = extend_heap(extendsize / WSIZE)) == NULL)
+		return NULL;
+	void* ret = place(bp, asize, GET_SIZE(bp), LIST_CNT - 1, -1) -> data;
+	DEBUG("%d(%p)\n", (int)(ret - heap_starts), ret);
+	//pthread_mutex_unlock(&malloc_lock);
+	pthread_mutex_unlock(&malloc_lock);
+	DEBUG("In mm_malloc_thread: ret=%p\n", ret);
+	return ret;
 }
 
 /**********************************************************
@@ -388,108 +433,21 @@ void mm_free(void* ptr) {
  * If no block satisfies the request, the heap is extended
  **********************************************************/
 void *mm_malloc(size_t size) {
-    pthread_mutex_lock(&malloc_lock);
 #ifdef RUN_MM_CHECK
     mm_check();
 #endif
     DEBUG("mm_malloc %d @ %d -> ", size, ++cmd_cnt);
-    //pthread_mutex_lock(&malloc_lock);
-    size_t asize; /* adjusted block size */
-    size_t extendsize; /* amount to extend heap if no fit */
-    block *bp;
-    int list_no, n_list_no;
-
-    /* Ignore spurious requests */
-    if (size == 0)
-        return NULL;
-
+	/* Ignore spurious requests */
+	if (size == 0)
+		return NULL;
     /* Adjust block size to include overhead and alignment reqs. */
-    asize = ALIGN_16B(size + DSIZE);
-
-    /* Find the appropriate list to start to search for a fit free block */
-    list_no = find_list(asize);
-    for (n_list_no = list_no; n_list_no < LIST_CNT; ++n_list_no)
-        /* Search the free list for a fit */
-        if ((bp = find_fit(asize, list_heads[n_list_no])) != NULL) {
-            void* ret = place(bp, asize, GET_SIZE(bp), n_list_no, -1)->data;
-            DEBUG("%d(%p)\n", (int)(ret - heap_starts), ret);
-            pthread_mutex_unlock(&malloc_lock);
-            return ret;
-        }
-
-    /* No fit found. Get more memory and place the block */
-//	if (!GET_ALLOC(LAST_BLOCK))
-//		extendsize -= GET_SIZE(LAST_BLOCK);
-
-//	static int asize_rec[25] = {0};
-//	static int asize_pt = 0;
-//	static int ext_cnt = 0;
-//	static int asize_sum = 0;
-
-//	asize_sum = asize_sum - asize_rec[asize_pt] + asize;
-//	asize_rec[asize_pt] = asize;
-//	asize_pt = (asize_pt + 1) % 25;
-//	if (++ext_cnt>=25)
-//		CHUNKSIZE = asize_sum;
-
-    // Adjust the chunk size adaptively
-    if (asize > chunksize)
-        chunksize = MIN(MAXCHUNKSIZE, chunksize * 2);
-
-    extendsize = MAX(asize, chunksize);
-    if ((bp = extend_heap(extendsize / WSIZE)) == NULL)
-        return NULL;
-    void* ret = place(bp, asize, GET_SIZE(bp), LIST_CNT - 1, -1) -> data;
-    DEBUG("%d(%p)\n", (int)(ret - heap_starts), ret);
-    //pthread_mutex_unlock(&malloc_lock);
-    pthread_mutex_unlock(&malloc_lock);
-    return ret;
-}
-
-/**********************************************************
- * mm_realloc
- * Implemented simply in terms of mm_malloc and mm_free
- *********************************************************/
-void *mm_realloc(void *ptr, size_t size) {
-    /* If size == 0 then this is just free, and we return NULL. */
-#ifdef RUN_MM_CHECK
-    mm_check();
-#endif
-    DEBUG("mm_realloc %d(%p) to size %d @ %d\n", (int)(ptr - heap_starts), ptr, size, ++cmd_cnt);
-    --cmd_cnt;
-    if (size == 0) {
-        mm_free(ptr);
-        return NULL;
-    }
-    /* If oldptr is NULL, then this is just malloc. */
-    if (ptr == NULL)
-        return (mm_malloc(size));
-
-    ablock *bp = DATA2BLOCK(ptr);
-    int asize = ALIGN_16B(size + DSIZE);
-    // Coalesce with next empty block
-    if (!GET_ALLOC(NEXT_BLKP(bp))) {
-        list_remove(NEXT_BLKP(bp));
-        bp -> size = PACK(GET_SIZE(bp) + GET_SIZE(NEXT_BLKP(bp)), 1);
-        SET_FOOTER(bp);
-    }
-    // Try to split the current block
-    if (GET_SIZE(bp) >= asize) {
-        ++cmd_cnt;
-        return place(bp, asize, GET_SIZE(bp), LIST_CNT - 1, 0)->data;
-    }
-
-    // When we have to allocate a new block
-    ablock* newptr = DATA2BLOCK(mm_malloc(size));
-    if (newptr == NULL)
-        return NULL;
-
-    /* Copy the old data. */
-    memcpy(newptr -> data, bp -> data, MIN(GET_DATASIZE(bp), size));
-    --cmd_cnt;
-    mm_free(bp->data);
-    DEBUG("realloc %d(%p) -> return %d(%p) size %d\n", (int)(ptr - heap_starts), ptr, (int)((void*)newptr - heap_starts), newptr, size);
-    return newptr -> data;
+    size_t asize = ALIGN_16B(size + DSIZE);
+	pthread_t th;
+	void* exit_status;
+	pthread_create(&th, NULL,mm_free_thread, &asize);
+	pthread_join(th, &exit_status);
+	DEBUG("In mm_malloc: ret=%p\n", exit_status);
+	return exit_status;
 }
 
 /**********************************************************

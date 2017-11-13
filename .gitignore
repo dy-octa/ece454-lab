@@ -9,3 +9,9 @@ compile_commands.json
 CTestTestfile.cmake
 lab2/bin
 .idea
+Lab4/benchmarks/cache-scratch/Results
+Lab4/benchmarks/cache-thrash/Results
+Lab4/benchmarks/larson/Results
+Lab4/benchmarks/threadtest/Results
+*.o
+*.a
