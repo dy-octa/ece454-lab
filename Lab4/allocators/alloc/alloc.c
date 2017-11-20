@@ -352,6 +352,7 @@ block *find_fit(size_t asize, block* listp) {
  * -1: split in alternative ways
  * Precondition: if list_no == LIST_CNT, bp was not in any list
  * otherwise bp was in list[list_no] and the thread is holding a write lock of list[list_no]
+ * Postcondition: if list_no != LIST_CNT, the write lock is released
  **********************************************************/
 ablock* place(block* bp, int asize, int free_size, int list_no, int des_direction) {
     if (free_size - asize <= EMPTY_BLOCKSIZE) // If the remaining space after the split could not hold a block
@@ -453,21 +454,21 @@ void* mm_malloc_thread(void* args) {
 	/* Find the appropriate list to start to search for a fit free block */
 	list_no = find_list(asize);
 	pthread_rwlock_rdlock(&heap_rw_lock);
-	for (n_list_no = list_no; n_list_no < LIST_CNT; ++n_list_no)
+	for (n_list_no = list_no; n_list_no < LIST_CNT; ++n_list_no) {
 		/* Search the free list for a fit */
 		pthread_rwlock_rdlock(&list_rwlock[n_list_no]);
 		if ((bp = find_fit(asize, list_heads[n_list_no])) != NULL) {
 			pthread_rwlock_promote(&list_rwlock[n_list_no]);
-			void* ret = place(bp, asize, GET_SIZE(bp), n_list_no, -1)->data;
-			DEBUG("%d(%p)\n", (int)(ret - heap_starts), ret);
+			void *ret = place(bp, asize, GET_SIZE(bp), n_list_no, -1)->data;
+			DEBUG("%d(%p)\n", (int) (ret - heap_starts), ret);
 #ifdef RUN_MM_CHECK
-	mm_check();
+			mm_check();
 #endif
-//			pthread_mutex_unlock(&malloc_lock);
 			pthread_rwlock_unlock(&heap_rw_lock);
 			return ret;
 		}
-
+		pthread_rwlock_unlock(&list_rwlock[n_list_no]);
+	}
 	/* No fit found. Get more memory and place the block */
 	// Adjust the chunk size adaptively
 	if (asize > chunksize)
