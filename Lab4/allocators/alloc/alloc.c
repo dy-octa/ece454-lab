@@ -121,7 +121,7 @@ int chunksize;
 
 /* Used for logging */
 int cmd_cnt;
-int heap_starts;
+long long heap_starts;
 int coalesce_counter;
 
 /**********************************************************
@@ -153,9 +153,9 @@ void list_insert(block* bp, int list_no) {
     pos -> next = bp;
     bp -> prev = pos;
     DEBUG("[%x] Inserted %d(%p) to list[%d] ", pthread_self(), (int)((void*)bp - heap_starts), bp, list_no);
-    if ((void*)bp->prev < heap_starts)
-        DEBUG("prev -> head[%d](%p) ", bp->prev - list_heads[0], bp->prev);
-    else DEBUG("prev -> %d(%p) ", (int)((void*)(bp->prev) - heap_starts), bp->prev);
+    if (bp->prev <= list_heads[LIST_CNT - 1])
+        DEBUG("prev -> list[%d](%p) ", ((void*)bp->prev - (void*)list_heads[0]) / EMPTY_BLOCKSIZE, bp->prev);
+    else DEBUG("prev -> %d(%p) ", (int)((void*)(bp->prev) - (void*)heap_starts), bp->prev);
     if (bp->next == NULL)
 	DEBUG("next -> NULL\n", 0);
     else DEBUG("next -> %d(%p)\n", (int)((void*)(bp->next) - heap_starts), bp->next);
@@ -215,7 +215,7 @@ void relocate_free_segment(block* bp, size_t size, int search_from) {
  **********************************************************/
 int mm_init(void) {
 //	freopen ("mm.log", "w", stdout);
-	freopen ("/dev/tty", "a", stderr);
+//	freopen ("/dev/tty", "a", stderr);
 //	freopen("size.log", "a", stderr);
 	DEBUG("Starting mm_init..\n", 0);
     mem_init();
@@ -227,7 +227,6 @@ int mm_init(void) {
     // Make up the space for list heads, prologue & epilogue
     if ((heap_listp = mem_sbrk(6 * WSIZE + LIST_CNT * EMPTY_BLOCKSIZE)) == (void *) -1)
         return -1;
-    DEBUG("Init: allocate %d bytes, %p -> ", mem_usage(), heap_listp);
     block* pt = heap_listp;
     // Set up an empty block as the head (sentinel) node of each segregated list
     for (int i=0; i < LIST_CNT; ++i) {
@@ -236,6 +235,7 @@ int mm_init(void) {
         pt -> size = PACK(EMPTY_BLOCKSIZE, 0); // sentinel header
         SET_FOOTER(pt); // sentinel footer
         list_heads[i] = pt;
+	    DEBUG("list #%d(size: %d): %p\n", i, list_size[i], list_heads[i]);
 	    pthread_rwlock_init(&list_rwlock[i], NULL);
         pt = MOVE(pt, EMPTY_BLOCKSIZE);
     }
@@ -246,9 +246,8 @@ int mm_init(void) {
     SET_FOOTER(pt); // prologue footer
     heap_starts = pt = MOVE(pt, EMPTY_BLOCKSIZE);
     pt -> size = PACK(1, 1); // epilogue header
-//    DEBUG("%p\n", MOVE(pt, WSIZE));
+	DEBUG("Init: allocate %d bytes, %p -> %p\n", mem_usage(), heap_listp, MOVE(pt, WSIZE));
 	pthread_rwlock_init(&heap_rw_lock, NULL);
-    DEBUG("Exiting mm_init..\n", 0);
     return 0;
 }
 
@@ -261,16 +260,21 @@ int mm_init(void) {
  * - both neighbours are available for coalescing
  **********************************************************/
 void coalesce() {
+	block* start = dseg_lo + 5*WSIZE + LIST_CNT * EMPTY_BLOCKSIZE;
 	pthread_rwlock_wrlock(&heap_rw_lock);
-	for (block* bp = heap_starts;  (void*)bp < dseg_hi - WSIZE; bp = NEXT_BLKP(bp)) {
+	DEBUG("[%x] Enter coalesce\n", pthread_self());
+	for (block* bp = start;  (void*)bp < dseg_hi - WSIZE; bp = NEXT_BLKP(bp)) {
 		if (!GET_ALLOC(bp) && !GET_ALLOC(NEXT_BLKP(bp))) {
+			DEBUG("[%x] Coalesce %d", pthread_self(), (int)((void*)bp - heap_starts));
 			list_remove(bp);
 			do {
 				block* nbp = NEXT_BLKP(bp);
+				DEBUG(", %d", (int)((void*)nbp - heap_starts));
 				list_remove(nbp);
-				bp -> size += NEXT_BLKP(nbp) -> size;
+				bp -> size += NEXT_BLKP(bp) -> size;
 				SET_FOOTER(bp);
 			} while (!GET_ALLOC(NEXT_BLKP(bp)));
+			DEBUG("\n", 0);
 			list_insert(bp, find_list(bp->size));
 		}
 	}
@@ -393,7 +397,7 @@ void* mm_free_thread(void* args) {
 //	pthread_mutex_lock(&malloc_lock);
 //	DEBUG("%x acquired lock in free\n", pthread_self());
 	pthread_rwlock_rdlock(&heap_rw_lock);
-    	DEBUG("[%x] mm_free %d(%p) @ %d\n", pthread_self(),  (int)(ptr - heap_starts), ptr, ++cmd_cnt);
+	DEBUG("[%x] mm_free %d(%p) @ %d\n", pthread_self(),  (int)(ptr - heap_starts), ptr, ++cmd_cnt);
 #ifdef RUN_MM_CHECK
 	mm_check();
 #endif
@@ -439,16 +443,13 @@ void* mm_malloc_thread(void* args) {
 	int list_no, n_list_no;
 	size_t asize = *((size_t*)args); /* adjusted block size */
 
+#ifdef RUN_MM_CHECK
+	mm_check();
+#endif
 	if (++coalesce_counter >= 20) {
 		coalesce_counter = 0;
 		coalesce();
 	}
-//	DEBUG("%x attempt to acquire lock in malloc\n", pthread_self());
-//	pthread_mutex_lock(&malloc_lock);
-//	DEBUG("%x acquired lock in malloc\n", pthread_self());
-#ifdef RUN_MM_CHECK
-    mm_check();
-#endif
     DEBUG("[%x] mm_malloc %d @ %d -> ", pthread_self(), asize, ++cmd_cnt);
 
 	/* Find the appropriate list to start to search for a fit free block */
