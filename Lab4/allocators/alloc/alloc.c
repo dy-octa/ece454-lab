@@ -97,12 +97,12 @@ typedef struct ablock_st{
 #define LAST_BLOCK (PREV_BLKP(dseg_hi + 1 - WSIZE))
 
 /* Number of segregated lists */
-#define LIST_CNT 19
+#define LIST_CNT 5
 
 /* Head nodes of segregated lists */
 block* list_heads[LIST_CNT];
 /* Block size constraint of each list */
-const int list_size[LIST_CNT] = {23, 32, 80, 88, 128, 144, 176, 464, 528, 1734, 4088, 4111, 5573, 8206, 11152, 15472, 19528, 23961, 28437};
+const int list_size[LIST_CNT] = {16, 32, 48, 64, 80};
 pthread_rwlock_t list_rwlock[LIST_CNT];
 pthread_rwlock_t heap_rw_lock;
 
@@ -160,9 +160,9 @@ void pthread_rwlock_promote(pthread_rwlock_t* lock) {
  **********************************************************/
 void list_insert(block* bp, int list_no) {
     block* pos = list_heads[list_no];
-    /* Find the appropriate position to insert the node */
-    while (pos->next && pos->next < bp)
-        pos = pos->next;
+//    /* Find the appropriate position to insert the node */
+//    while (pos->next && pos->next < bp)
+//        pos = pos->next;
     if (pos -> next) {
         pos -> next -> prev = bp;
         bp -> next = pos -> next;
@@ -170,6 +170,7 @@ void list_insert(block* bp, int list_no) {
     else bp -> next = NULL;
     pos -> next = bp;
     bp -> prev = pos;
+#ifdef DEBUG_MODE
     DEBUG("[%x] Inserted %d(%p) to list[%d] ", pthread_self(), (int)((void*)bp - heap_starts), bp, list_no);
     if (bp->prev <= list_heads[LIST_CNT - 1])
         DEBUG("prev -> list[%d](%p) ", ((void*)bp->prev - (void*)list_heads[0]) / EMPTY_BLOCKSIZE, bp->prev);
@@ -177,6 +178,7 @@ void list_insert(block* bp, int list_no) {
     if (bp->next == NULL)
 	DEBUG("next -> NULL\n", 0);
     else DEBUG("next -> %d(%p)\n", (int)((void*)(bp->next) - heap_starts), bp->next);
+#endif
 }
 
 /**********************************************************
@@ -236,6 +238,7 @@ int mm_init(void) {
 //	freopen ("mm.log", "w", stdout);
 //	freopen ("/dev/tty", "a", stderr);
 //	freopen("size.log", "a", stderr);
+//	freopen("sizes.log", "w", stderr);
 	DEBUG("Starting mm_init..\n", 0);
     mem_init();
 
@@ -466,7 +469,7 @@ void* mm_malloc_thread(int asize) {
 	size_t extendsize; /* amount to extend heap if no fit */
 	block *bp;
 	int list_no, n_list_no;
-
+//	fprintf(stderr, "%d\n", asize);
 	if (++coalesce_counter >= 20) {
 		coalesce_counter = 0;
 		coalesce();
