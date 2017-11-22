@@ -1,0 +1,17 @@
+/* team name */
+     "Cheesecake",
+     /* Full name of first team member */
+     "Andrei Patranoiu",
+     /* Email address of first team member */
+     "andrei.patranoiu@mail.utoronto.ca",
+     /* Student Number of first team member */
+     "998130696"
+     /* Full name of second team member */
+     "Mutian He",
+     /* Email address of second team member */
+     "mutian.he@mail.utoronto.ca",
+     /* Student Number of second team member */
+     "1004654475"
+
+
+Our implementation extends our Lab 3 implementation of a memory allocater. It uses an Unallocated block of minimum 32 bytes and an allocated block size size of minimum 16 bytes stored in a segregated list.. For our multithreading implementation we attempted to use a combination of read locks and write locks from pthread_rwlocks. Leveraging that our implementation uses a segregated list, we tried to use fine grain locks write locks on the individual lists of the segregated list, read locks where it was safe to do so so multiple threads could read at once and broader mutex locks for areas which were deemed too critical for multiple threads to be interacting with at the same time. 

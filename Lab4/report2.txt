@@ -1,0 +1,16 @@
+/* team name */
+     "Cheesecake",
+     /* Full name of first team member */
+     "Andrei Patranoiu",
+     /* Email address of first team member */
+     "andrei.patranoiu@mail.utoronto.ca",
+     /* Student Number of first team member */
+     "998130696"
+     /* Full name of second team member */
+     "Mutian He",
+     /* Email address of second team member */
+     "mutian.he@mail.utoronto.ca",
+     /* Student Number of second team member */
+     "1004654475"
+
+Our implementation of the Lab3 memory allocater proved to be too slow both sequentially and with multi-threading. The implemantation in Lab3 used a segregated list however during Lab4 testing we discovered that most of the malloc requests were of the same size, essentially turning our segregated list into one long list. We had originally wanted to implement fine grain locks on each of the lists but, as previously stated, we discovered this would be useless with the Lab4 input. We instead modified our code to use superblocks initialized per thread, each with their own pool of memory to allocate and free from and each with their own mutex lock. Threads would then operate on their own superblocks, with the case of cross superblock corruption being protected by super block specific mutex locks.

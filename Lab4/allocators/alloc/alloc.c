@@ -39,7 +39,7 @@ name_t myname = {
 #define MAXCHUNKSIZE   (32768)      /* maximal heap chunk size (bytes) */
 #define PAGESIZE (4096)
 
-#define MAX_THREAD 10000 // Max number of thread supported
+#define MAX_THREAD 200 // Max number of thread supported
 
 #define MAX(x, y) ((x) > (y)?(x) :(y))
 #define MIN(x, y) ((x) < (y)?(x) :(y))
@@ -132,7 +132,7 @@ int cmd_cnt;
 pthread_rwlock_t heap_rw_lock;
 
 /* Global meta data and its lock */
-global_header global_metadata;
+global_header *global_metadata;
 pthread_rwlock_t global_metadata_rwlock;
 
 /* Pointer to the start of superblocks, should be equal to lowest address of heap */
@@ -187,13 +187,13 @@ fprintf(stderr, "[%x] un_rwlock %p in %s\n", (unsigned)pthread_self(), ptr, __FU
 int insert_arena(pthread_t pthread_id, superblock* sbp) {
 	WRLOCK(&global_metadata_rwlock);
 	DEBUG("[%x] Inserted sb[%d] to th[%x]\n", (unsigned)pthread_self(), SUPERBLOCK_NO(sbp), (unsigned)pthread_id);
-	int cnt = global_metadata.pthread_cnt++;
+	int cnt = (*global_metadata).pthread_cnt++;
 	if (cnt == MAX_THREAD) {
 		fprintf(stderr, "TOO MANY THREADS!\n");
 		exit(0);
 	}
-	global_metadata.pthread_id[cnt] = pthread_id;
-	global_metadata.ptr[cnt] = sbp;
+	(*global_metadata).pthread_id[cnt] = pthread_id;
+	(*global_metadata).ptr[cnt] = sbp;
 	RW_UNLOCK(&global_metadata_rwlock);
 	return cnt;
 }
@@ -207,9 +207,9 @@ int insert_arena(pthread_t pthread_id, superblock* sbp) {
 
 int superblock_lookup(pthread_t pthread_id) {
 	RDLOCK(&global_metadata_rwlock);
-	int cnt = global_metadata.pthread_cnt;
+	int cnt = (*global_metadata).pthread_cnt;
 	for (int i=0; i<cnt; ++i) {
-		if (global_metadata.pthread_id[i] == pthread_id) {
+		if ((*global_metadata).pthread_id[i] == pthread_id) {
 			RW_UNLOCK(&global_metadata_rwlock);
 			return i;
 		}
@@ -336,9 +336,10 @@ int mm_init(void) {
 		exit(0);
 	}
     mem_init();
+	superblocks = mem_sbrk(PAGESIZE);
     cmd_cnt = 0;
-	superblocks = NULL; // To denote that no superblock is allocated initally, which will be checked in allocate_superblock()
-	memset(&global_metadata, 0, sizeof(global_metadata));
+	global_metadata = superblocks;
+	memset(global_metadata, 0, sizeof(global_header));
 	pthread_mutex_init(&heap_rw_lock, NULL);
 	pthread_rwlock_init(&global_metadata_rwlock, NULL);
     return 0;
@@ -484,7 +485,7 @@ void* mm_malloc_thread(int asize) {
 		sbp = allocate_superblock();
 		list_no = insert_arena(id, sbp);
 	}
-	else sbp = global_metadata.ptr[list_no];
+	else sbp = (*global_metadata).ptr[list_no];
 
 	for (; sbp != NULL; sbp = sbp -> next) {
 		LOCK(&sbp -> lock);
@@ -512,8 +513,8 @@ void* mm_malloc_thread(int asize) {
 		DEBUG("size too large!!!\n", 0);
 		return NULL;
 	}
-	sbp -> next = global_metadata.ptr[list_no];
-	global_metadata.ptr[list_no] = sbp;
+	sbp -> next = (*global_metadata).ptr[list_no];
+	(*global_metadata).ptr[list_no] = sbp;
 	void* ret = place(bp, asize, GET_SIZE(bp), -1) -> data;
 	DEBUG("[%x] mm_malloc %d -> %d(%p) success\n", (unsigned)pthread_self(), asize, BLOCK_OFFSET(ret), ret);
 	RW_UNLOCK(&heap_rw_lock);
@@ -552,11 +553,11 @@ int mm_check(void) {
 	if (cmd_cnt < 25536)
 		return 0;
 	pthread_rwlock_wrlock(&heap_rw_lock);
-	int cnt = global_metadata.pthread_cnt;
+	int cnt = (*global_metadata).pthread_cnt;
 	for (int i=0; i<cnt; ++i) {
-		pthread_t th_id = global_metadata.pthread_id[i];
+		pthread_t th_id = (*global_metadata).pthread_id[i];
 		DEBUG("Thread [%x] in arena[%d]\n", (unsigned)th_id, i);
-		for (sbp = global_metadata.ptr[i]; sbp != NULL; sbp = sbp->next) {
+		for (sbp = (*global_metadata).ptr[i]; sbp != NULL; sbp = sbp->next) {
 			int sb_no = SUPERBLOCK_NO(sbp);
 			// Check if the superblock is aligned to 4K
 			if ((int) ((void *) sbp - (void *) dseg_lo) % PAGESIZE != 0) {
