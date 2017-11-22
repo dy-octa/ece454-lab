@@ -39,7 +39,7 @@ name_t myname = {
 #define MAXCHUNKSIZE   (32768)      /* maximal heap chunk size (bytes) */
 #define PAGESIZE (4096)
 
-#define MAX_THREAD 10 // Max number of thread supported
+#define MAX_THREAD 10000 // Max number of thread supported
 
 #define MAX(x, y) ((x) > (y)?(x) :(y))
 #define MIN(x, y) ((x) < (y)?(x) :(y))
@@ -145,11 +145,18 @@ superblock* superblocks;
 
 #define DEBUG(f, ...) (fprintf(stderr, (f), __VA_ARGS__))
 
+//#define RUN_MM_CHECK
+
+#else
+
+#define DEBUG(f, ...) (0)
+
+#endif
+
+#ifdef LOCK_LOG
 
 #define LOCK(ptr) (fprintf(stderr, "[%x] attempt lock %d(%p) in %s\n", (unsigned)pthread_self(), SUPERBLOCK_NO(ptr), ptr, __FUNCTION__), \
 pthread_mutex_lock(ptr), fprintf(stderr, "[%x] attempt lock %d(%p) in %s\n", (unsigned)pthread_self(), SUPERBLOCK_NO(ptr), ptr, __FUNCTION__))
-
-
 #define UNLOCK(ptr) (fprintf(stderr, "[%x] attempt unlock %d(%p) in %s\n", (unsigned)pthread_self(), SUPERBLOCK_NO(ptr), ptr, __FUNCTION__), \
 pthread_mutex_unlock(ptr), fprintf(stderr, "[%x] attempt unlock %d(%p) in %s\n", (unsigned)pthread_self(), SUPERBLOCK_NO(ptr), ptr, __FUNCTION__))
 
@@ -160,11 +167,7 @@ pthread_rwlock_wrlock(ptr), fprintf(stderr, "[%x] wrlock %p in %s\n", (unsigned)
 #define RW_UNLOCK(ptr) (pthread_rwlock_unlock(ptr), \
 fprintf(stderr, "[%x] un_rwlock %p in %s\n", (unsigned)pthread_self(), ptr, __FUNCTION__))
 
-#define RUN_MM_CHECK
-
 #else
-
-#define DEBUG(f, ...) (0)
 
 #define LOCK(ptr) (pthread_mutex_lock(ptr))
 #define UNLOCK(ptr) (pthread_mutex_unlock(ptr))
@@ -174,7 +177,6 @@ fprintf(stderr, "[%x] un_rwlock %p in %s\n", (unsigned)pthread_self(), ptr, __FU
 #define RW_UNLOCK(ptr) (pthread_rwlock_unlock(ptr))
 
 #endif
-
 /**********************************************************
  * superblock_lookup
  * For a newly encountered thread, insert its arena
@@ -279,6 +281,8 @@ void list_insert(block* bp) {
 		bp -> next = sbp -> head;
 		bp -> next -> prev = bp;
 	}
+	else bp -> next = NULL;
+	bp -> prev = NULL;
 	sbp -> head = bp;
 #ifdef DEBUG_MODE
 	DEBUG("[%x] Inserted %d(%p) to superblock %d(%p)\n", (unsigned)pthread_self(), BLOCK_OFFSET(bp), bp, SUPERBLOCK_NO(bp), sbp);
@@ -545,6 +549,8 @@ void *mm_malloc(size_t size) {
 int mm_check(void) {
     block *bp, *nbp;
 	superblock* sbp;
+	if (cmd_cnt < 25536)
+		return 0;
 	pthread_rwlock_wrlock(&heap_rw_lock);
 	int cnt = global_metadata.pthread_cnt;
 	for (int i=0; i<cnt; ++i) {
