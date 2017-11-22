@@ -182,6 +182,7 @@ fprintf(stderr, "[%x] un_rwlock %p in %s\n", pthread_self(), ptr, __FUNCTION__))
 int insert_arena(pthread_t pthread_id, superblock* sbp) {
 	int cnt = global_metadata.cnt++;
 	DEBUG("[%x] Inserted sb[%d] to th[%d]\n", pthread_self(), SUPERBLOCK_NO(sbp), pthread_id);
+	int cnt = global_metadata.pthread_cnt++;
 	if (cnt == 8) {
 		fprintf(stderr, "TOO MANY THREADS!\n");
 		exit(0);
@@ -478,18 +479,18 @@ void* mm_malloc_thread(int asize) {
 	else sbp = global_metadata.ptr[list_no];
 
 	for (; sbp -> next != NULL; sbp = sbp -> next) {
-		LOCK(sbp -> lock);
+		LOCK(&sbp -> lock);
 		if ((bp = find_fit(asize, sbp -> head)) != NULL) {
 			void *ret = place(bp, asize, GET_SIZE(bp), -1) -> data;
 			DEBUG("[%x] mm_malloc %d -> %d(%p) success\n", pthread_self(), asize, (int) (ret - SUPERBLOCK_DATA(ret)), ret);
-			UNLOCK(sbp -> lock);
+			UNLOCK(&sbp -> lock);
 			RW_UNLOCK(&heap_rw_lock);
 #ifdef RUN_MM_CHECK
 			mm_check();
 #endif
 			return ret;
 		}
-		UNLOCK(sbp -> lock);
+		UNLOCK(&sbp -> lock);
 	}
 
 	/* No fit found. Allocate a new superblock */
