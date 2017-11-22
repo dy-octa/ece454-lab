@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <strings.h>
+#include <string.h>
 #include <unistd.h>
 #include <assert.h>
 #include <pthread.h>
@@ -112,23 +113,23 @@ typedef struct global_header_ {
 #define SET_FOOTER(pt) ({PUT(FTRP(pt), ((block*) (pt)) -> size);})
 
 /* #Superblock of a ptr */
-#define SUPERBLOCK_NO(ptr) (((void*)ptr - (void*)superblocks) >> 12)
+#define SUPERBLOCK_NO(ptr) ((int)(((void*)ptr - (void*)superblocks) >> 12))
 
 /* Pointer to the superblock of a ptr */
 #define SUPERBLOCK_OF(ptr) (&superblocks[SUPERBLOCK_NO(ptr)])
 
 /* Pointer to the data of the superblock of ptr */
-#define SUPERBLOCK_DATA(ptr) (SUPERBLOCK_OF(ptr) -> data)
+#define SUPERBLOCK_DATA(ptr) ((void*)(SUPERBLOCK_OF(ptr) -> data))
 
 /* Offset of a pointer in the payload of a superblock */
-#define BLOCK_OFFSET(ptr) ((int)((void*)ptr - SUPERBLOCK_DATA(ptr)))
+#define BLOCK_OFFSET(ptr) ((int)((void*)ptr - (void*)SUPERBLOCK_DATA(ptr)))
 
 /* Used for logging */
 int cmd_cnt;
 int coalesce_counter;
 
 /* Global heap rwlock */
-pthread_rwlock_t heap_rwlock;
+pthread_rwlock_t heap_rw_lock;
 
 global_header global_metadata;
 
@@ -180,8 +181,7 @@ fprintf(stderr, "[%x] un_rwlock %p in %s\n", pthread_self(), ptr, __FUNCTION__))
  **********************************************************/
 
 int insert_arena(pthread_t pthread_id, superblock* sbp) {
-	int cnt = global_metadata.cnt++;
-	DEBUG("[%x] Inserted sb[%d] to th[%d]\n", pthread_self(), SUPERBLOCK_NO(sbp), pthread_id);
+	DEBUG("[%x] Inserted sb[%d] to th[%x]\n", pthread_self(), SUPERBLOCK_NO(sbp), pthread_id);
 	int cnt = global_metadata.pthread_cnt++;
 	if (cnt == 8) {
 		fprintf(stderr, "TOO MANY THREADS!\n");
@@ -256,7 +256,7 @@ superblock* allocate_superblock() {
 	sbp -> head -> prev = sbp -> head -> next = NULL;
 	SET_FOOTER(sbp -> head);
 	//Set up the entire data part as a free block
-	DEBUG("[%x] allocated superblock %d(%p)\n", SUPERBLOCK_NO(sbp), sbp);
+	DEBUG("[%x] allocated superblock %d(%p)\n", pthread_self(), SUPERBLOCK_NO(sbp), sbp);
 
 	return sbp;
 }
@@ -276,7 +276,7 @@ void list_insert(block* bp) {
     pos -> next = bp;
     bp -> prev = pos;
 #ifdef DEBUG_MODE
-	DEBUG("[%x] Inserted %d(%p) to sb %d(%p)\n", pthread_self(), (int)((void*)bp - SUPERBLOCK_DATA(bp)),SUPERBLOCK_NO(bp), sbp);
+	DEBUG("[%x] Inserted %d(%p) to superblock %d(%p)\n", pthread_self(), BLOCK_OFFSET(bp), bp, SUPERBLOCK_NO(bp), sbp);
 #endif
 }
 
@@ -305,8 +305,8 @@ void list_remove(block* bp) {
  * Precondition: the thread is holding the lock of the superblock of bp
  **********************************************************/
 void relocate_free_segment(block* bp, size_t size) {
-    int i;
-	DEBUG("[%x] Relocate free segment %d in sbp\n", pthread_self(), &bp->size, size);
+	DEBUG("[%x] Relocate free segment %d(%p) sized %d in superblock %d(%p)\n",
+	      pthread_self(), BLOCK_OFFSET(bp), bp, size, SUPERBLOCK_NO(bp), SUPERBLOCK_OF(bp));
     bp->size = size;
     SET_FOOTER(bp);
     list_insert(bp);
@@ -393,8 +393,8 @@ block *find_fit(size_t asize, block* listp) {
 ablock* place(block* bp, int asize, int free_size, int des_direction) {
 	static char rec_direction = 0;
 	char direction = des_direction == -1? rec_direction : des_direction;
-	DEBUG("[%x] allocate %d in block %d(%p) sized %d at list[%d], direction: %s\n",
-	      pthread_self(), asize, BLOCK_OFFSET(bp), bp, free_size, list_no, direction == 0? "LOW":"HIGH");
+	DEBUG("[%x] allocate %d in block %d(%p) sized %d at superblock %d(%p), direction: %s\n",
+	      pthread_self(), asize, BLOCK_OFFSET(bp), bp, free_size, SUPERBLOCK_NO(bp), SUPERBLOCK_OF(bp), direction == 0? "LOW":"HIGH");
     if (free_size - asize <= EMPTY_BLOCKSIZE) // If the remaining space after the split could not hold a block
         asize = free_size;
 
@@ -429,9 +429,9 @@ void* mm_free_thread(void* ptr) {
 #endif
 	RDLOCK(&heap_rw_lock);
 	DEBUG("[%x] mm_free %d(%p) @ %d\n", pthread_self(),  BLOCK_OFFSET(ptr), ptr, ++cmd_cnt);
-	block* bp = DATA2BLOCK((block *)ptr);
+	block* bp = DATA2BLOCK(ptr);
 
-	pthread_mutex_lock(&SUPERBLOCK_OF(SUPERBLOCK_OF)->lock);
+	pthread_mutex_lock(&SUPERBLOCK_OF(bp)->lock);
 	DEBUG("[%x] PUT(%p, 0x%x)\n", pthread_self(), &bp->size, GET_SIZE(bp));
 	bp -> size = GET_SIZE(bp);
 	SET_FOOTER(bp);
@@ -439,7 +439,7 @@ void* mm_free_thread(void* ptr) {
 	bp->next = NULL;
 	bp->prev = NULL;
 	list_insert(bp);
-    pthread_mutex_unlock(&SUPERBLOCK_OF(SUPERBLOCK_OF)->lock);
+    pthread_mutex_unlock(&SUPERBLOCK_OF(bp)->lock);
 
 	DEBUG("[%x] %d mm_free success\n", pthread_self(), BLOCK_OFFSET(ptr));
 	RW_UNLOCK(&heap_rw_lock);
@@ -474,7 +474,7 @@ void* mm_malloc_thread(int asize) {
 	superblock* sbp;
 	if (list_no == -1) {
 		sbp = allocate_superblock();
-		list_no = (id, sbp);
+		list_no = insert_arena(id, sbp);
 	}
 	else sbp = global_metadata.ptr[list_no];
 
@@ -482,7 +482,7 @@ void* mm_malloc_thread(int asize) {
 		LOCK(&sbp -> lock);
 		if ((bp = find_fit(asize, sbp -> head)) != NULL) {
 			void *ret = place(bp, asize, GET_SIZE(bp), -1) -> data;
-			DEBUG("[%x] mm_malloc %d -> %d(%p) success\n", pthread_self(), asize, (int) (ret - SUPERBLOCK_DATA(ret)), ret);
+			DEBUG("[%x] mm_malloc %d -> %d(%p) success\n", pthread_self(), asize, BLOCK_OFFSET(ret), ret);
 			UNLOCK(&sbp -> lock);
 			RW_UNLOCK(&heap_rw_lock);
 #ifdef RUN_MM_CHECK
@@ -505,7 +505,7 @@ void* mm_malloc_thread(int asize) {
 		return NULL;
 	}
 	void* ret = place(bp, asize, GET_SIZE(bp), -1) -> data;
-	DEBUG("[%x] mm_malloc %d -> %d(%p) success\n", pthread_self(), asize, (int) (ret - SUPERBLOCK_DATA(ret)), ret);
+	DEBUG("[%x] mm_malloc %d -> %d(%p) success\n", pthread_self(), asize, BLOCK_OFFSET(ret), ret);
 	RW_UNLOCK(&heap_rw_lock);
 #ifdef RUN_MM_CHECK
 	mm_check();
@@ -537,96 +537,96 @@ void *mm_malloc(size_t size) {
  * Precondition: Current thread is holding none of the locks
  *********************************************************/
 int mm_check(void) {
-    block* start = dseg_lo + 5*WSIZE + LIST_CNT * EMPTY_BLOCKSIZE;
-    block *bp, *nbp;
-	pthread_rwlock_wrlock(&heap_rw_lock);
-    // Traverse all the free lists
-    for (int i = 0; i < LIST_CNT; ++i)
-        // Traverse the blocks in the free list
-        for (nbp = list_heads[i] -> next; nbp != NULL; nbp = nbp -> next) {
-            // Check if the block is free
-            if (GET_ALLOC(nbp)) {
-                fprintf(stderr, "[%x] Error: Block %d(%p) sized %d in free list %d is allocated\n", pthread_self(),
-                        (int)((void*)nbp - (void*)start), nbp, (int)GET_SIZE(nbp), i);
-				while (1);
-                return 0;
-            }
-            // Check if the size of the block fits the list
-            if ((i != 0 && GET_SIZE(nbp) < list_size[i]) || (i != LIST_CNT - 1 && GET_SIZE(nbp) >= list_size[i+1] )) {
-	            fprintf(stderr, "[%x] Error: Block %d(%p) sized %d stored free list for size %d\n", pthread_self(),
-	                    (int)((void*)nbp - (void*)start), nbp, (int)GET_SIZE(nbp), list_size[i]);
-			while (1);
-                return 0;
-            }
-            // Check if the block presents in the implicit list (linked in the heap by sizes)
-            for (bp = start; (void*)bp < dseg_hi - WSIZE; bp = NEXT_BLKP(bp))
-                if (bp == nbp)
-                    break;
-            if ((void*)bp > dseg_hi) {
-                fprintf(stderr, "[%x] Error: Block %d(%p) sized %d in free list %d could not be found in contiguity list\n", pthread_self(),
-                        (int)((void*)nbp - (void*)start), nbp, (int)GET_SIZE(nbp), i);
-			while (1);
-                return 0;
-            }
-        }
-    // Check if the prologue is correct
-    if (GET(MOVE(start, -WSIZE)) != PACK(EMPTY_BLOCKSIZE, 1)) {
-        fprintf(stderr, "[%x] Error: Illegal prologue %p: %d\n", pthread_self(), MOVE(start, -WSIZE), (int)GET(MOVE(start, -WSIZE)));
-		while (1);
-    }
-//	DEBUG("Start scanning from heap range %p, to %p\n", start, mem_heap_hi() - WSIZE);
-    // Traverse through the heap
-    for (bp = start; (void*)bp < dseg_hi - WSIZE; bp = NEXT_BLKP(bp)) {
-        int size = GET_SIZE(bp);
-//		DEBUG("(%p, %d)\n", bp, size);
-        // Check if the block data is 16B-aligned
-        if (((size_t) (bp -> data)) & 0xF) {
-            fprintf(stderr, "[%x] Error: Block %d(%p), sized %d, alloc:%d not aligned to 16B\n",
-                    pthread_self(), (int)((void*)bp - (void*)start), bp, (int)GET_SIZE(bp), GET_ALLOC(bp));
-	        while (1);
-            return 0;
-        }
-        // For a free block, check if it can be found in free list
-        if (size > 0 && !GET_ALLOC(bp)) {
-            int listno = find_list(size);
-            for (nbp = list_heads[listno]; nbp != NULL; nbp = nbp -> next)
-                if (nbp == bp)
-                    break ;
-            if (nbp == NULL) {
-                fprintf(stderr, "[%x] Error: Block %d(%p), sized %d could not be found in list %d\n", pthread_self(),
-                        (int)((void*)bp - (void*)start), bp, size, listno);
-				while (1);
-                return 0;
-            }
-        }
-    }
-    //Check if the epilogue is correct
-    if (bp -> size != PACK(1, 1)) {
-        fprintf(stderr, "[%x] Error: Illegal epilogue %p: %d\n", pthread_self(), bp, (int)bp->size);
-	    while (1);
-    }
-
-    // Output the memory locations in the current heap
-    DEBUG("[%x] Current heap:\n", pthread_self());
-    int acc_addr = 0;
-    for (bp = start;  (void*)bp < dseg_hi - WSIZE; bp = NEXT_BLKP(bp))
-        DEBUG("\t%d%c\t|", (int)GET_DATASIZE(bp), GET_ALLOC(bp)?'a':'f');
-    DEBUG("\n", 0);
-    // Output the memory offsets of the block boundaries
-    for (bp = start;  (void*)bp < dseg_hi - WSIZE; bp = NEXT_BLKP(bp)) {
-        acc_addr += GET_SIZE(bp);
-        DEBUG("\t\t%d", acc_addr);
-    }
-    DEBUG("\n\n", 0);
-	DEBUG("[%x] Current list:\n", pthread_self());
-	for (int i=0; i<LIST_CNT; ++i)
-		if (list_heads[i] -> next != NULL) {
-			DEBUG("list[%d](%d): ", i, list_size[i]);
-			for (nbp = list_heads[i] -> next; nbp != NULL; nbp = nbp -> next)
-				DEBUG("%d(%p)[%d], ", (int)((void*)nbp - heap_starts), nbp, nbp->size);
-			DEBUG("\n", 0);
-		}
-	DEBUG("\n\n", 0);
+//    block* start = dseg_lo + 5*WSIZE + LIST_CNT * EMPTY_BLOCKSIZE;
+//    block *bp, *nbp;
+//	pthread_rwlock_wrlock(&heap_rw_lock);
+//    // Traverse all the free lists
+//    for (int i = 0; i < LIST_CNT; ++i)
+//        // Traverse the blocks in the free list
+//        for (nbp = list_heads[i] -> next; nbp != NULL; nbp = nbp -> next) {
+//            // Check if the block is free
+//            if (GET_ALLOC(nbp)) {
+//                fprintf(stderr, "[%x] Error: Block %d(%p) sized %d in free list %d is allocated\n", pthread_self(),
+//                        (int)((void*)nbp - (void*)start), nbp, (int)GET_SIZE(nbp), i);
+//				while (1);
+//                return 0;
+//            }
+//            // Check if the size of the block fits the list
+//            if ((i != 0 && GET_SIZE(nbp) < list_size[i]) || (i != LIST_CNT - 1 && GET_SIZE(nbp) >= list_size[i+1] )) {
+//	            fprintf(stderr, "[%x] Error: Block %d(%p) sized %d stored free list for size %d\n", pthread_self(),
+//	                    (int)((void*)nbp - (void*)start), nbp, (int)GET_SIZE(nbp), list_size[i]);
+//			while (1);
+//                return 0;
+//            }
+//            // Check if the block presents in the implicit list (linked in the heap by sizes)
+//            for (bp = start; (void*)bp < dseg_hi - WSIZE; bp = NEXT_BLKP(bp))
+//                if (bp == nbp)
+//                    break;
+//            if ((void*)bp > dseg_hi) {
+//                fprintf(stderr, "[%x] Error: Block %d(%p) sized %d in free list %d could not be found in contiguity list\n", pthread_self(),
+//                        (int)((void*)nbp - (void*)start), nbp, (int)GET_SIZE(nbp), i);
+//			while (1);
+//                return 0;
+//            }
+//        }
+//    // Check if the prologue is correct
+//    if (GET(MOVE(start, -WSIZE)) != PACK(EMPTY_BLOCKSIZE, 1)) {
+//        fprintf(stderr, "[%x] Error: Illegal prologue %p: %d\n", pthread_self(), MOVE(start, -WSIZE), (int)GET(MOVE(start, -WSIZE)));
+//		while (1);
+//    }
+////	DEBUG("Start scanning from heap range %p, to %p\n", start, mem_heap_hi() - WSIZE);
+//    // Traverse through the heap
+//    for (bp = start; (void*)bp < dseg_hi - WSIZE; bp = NEXT_BLKP(bp)) {
+//        int size = GET_SIZE(bp);
+////		DEBUG("(%p, %d)\n", bp, size);
+//        // Check if the block data is 16B-aligned
+//        if (((size_t) (bp -> data)) & 0xF) {
+//            fprintf(stderr, "[%x] Error: Block %d(%p), sized %d, alloc:%d not aligned to 16B\n",
+//                    pthread_self(), (int)((void*)bp - (void*)start), bp, (int)GET_SIZE(bp), GET_ALLOC(bp));
+//	        while (1);
+//            return 0;
+//        }
+//        // For a free block, check if it can be found in free list
+//        if (size > 0 && !GET_ALLOC(bp)) {
+//            int listno = find_list(size);
+//            for (nbp = list_heads[listno]; nbp != NULL; nbp = nbp -> next)
+//                if (nbp == bp)
+//                    break ;
+//            if (nbp == NULL) {
+//                fprintf(stderr, "[%x] Error: Block %d(%p), sized %d could not be found in list %d\n", pthread_self(),
+//                        (int)((void*)bp - (void*)start), bp, size, listno);
+//				while (1);
+//                return 0;
+//            }
+//        }
+//    }
+//    //Check if the epilogue is correct
+//    if (bp -> size != PACK(1, 1)) {
+//        fprintf(stderr, "[%x] Error: Illegal epilogue %p: %d\n", pthread_self(), bp, (int)bp->size);
+//	    while (1);
+//    }
+//
+//    // Output the memory locations in the current heap
+//    DEBUG("[%x] Current heap:\n", pthread_self());
+//    int acc_addr = 0;
+//    for (bp = start;  (void*)bp < dseg_hi - WSIZE; bp = NEXT_BLKP(bp))
+//        DEBUG("\t%d%c\t|", (int)GET_DATASIZE(bp), GET_ALLOC(bp)?'a':'f');
+//    DEBUG("\n", 0);
+//    // Output the memory offsets of the block boundaries
+//    for (bp = start;  (void*)bp < dseg_hi - WSIZE; bp = NEXT_BLKP(bp)) {
+//        acc_addr += GET_SIZE(bp);
+//        DEBUG("\t\t%d", acc_addr);
+//    }
+//    DEBUG("\n\n", 0);
+//	DEBUG("[%x] Current list:\n", pthread_self());
+//	for (int i=0; i<LIST_CNT; ++i)
+//		if (list_heads[i] -> next != NULL) {
+//			DEBUG("list[%d](%d): ", i, list_size[i]);
+//			for (nbp = list_heads[i] -> next; nbp != NULL; nbp = nbp -> next)
+//				DEBUG("%d(%p)[%d], ", (int)((void*)nbp - start), nbp, nbp->size);
+//			DEBUG("\n", 0);
+//		}
+//	DEBUG("\n\n", 0);
 	pthread_rwlock_unlock(&heap_rw_lock);
     return 1;
 }
