@@ -82,7 +82,7 @@ typedef struct superblock_ {
 } superblock;
 
 typedef struct global_header_ {
-	int pthread_id[8];
+	pthread_t pthread_id[8];
 	superblock* ptr[8];
 	int pthread_cnt;
 } global_header;
@@ -117,6 +117,9 @@ typedef struct global_header_ {
 /* Pointer to the superblock of a ptr */
 #define SUPERBLOCK_OF(ptr) (&superblocks[SUPERBLOCK_NO(ptr)])
 
+/* Pointer to the data of the superblock of ptr */
+#define SUPERBLOCK_DATA(ptr) (SUPERBLOCK_OF(ptr) -> data)
+
 /* Used for logging */
 int cmd_cnt;
 long long heap_starts;
@@ -134,12 +137,20 @@ superblock* superblocks;
 
 #define DEBUG(f, ...) (fprintf(stderr, (f), __VA_ARGS__))
 
-#define RDLOCK(ptr) (fprintf(stderr, "[%x] attempt rdlock %s(%p) in %s\n", pthread_self(), ptr == &heap_rw_lock? "heap": "list", ptr, __FUNCTION__), \
-pthread_rwlock_rdlock(ptr), fprintf(stderr, "[%x] rdlock %s(%p) in %s\n", pthread_self(), ptr == &heap_rw_lock? "heap": "list", ptr, __FUNCTION__))
-#define WRLOCK(ptr) (fprintf(stderr, "[%x] attempt wrlock %s(%p) in %s\n", pthread_self(), ptr == &heap_rw_lock? "heap": "list", ptr, __FUNCTION__), \
-pthread_rwlock_wrlock(ptr), fprintf(stderr, "[%x] wrlock %s(%p) in %s\n", pthread_self(), ptr == &heap_rw_lock? "heap": "list", ptr, __FUNCTION__))
-#define UNLOCK(ptr) (pthread_rwlock_unlock(ptr), \
-fprintf(stderr, "[%x] unlock %s(%p) in %s\n", pthread_self(), ptr == &heap_rw_lock? "heap": "list", ptr, __FUNCTION__))
+
+#define LOCK(ptr) (fprintf(stderr, "[%x] attempt lock %d(%p) in %s\n", pthread_self(), SUPERBLOCK_NO(ptr), ptr, __FUNCTION__), \
+pthread_mutex_lock(ptr), fprintf(stderr, "[%x] attempt lock %d(%p) in %s\n", pthread_self(), SUPERBLOCK_NO(ptr), ptr, __FUNCTION__))
+
+
+#define UNLOCK(ptr) (fprintf(stderr, "[%x] attempt unlock %d(%p) in %s\n", pthread_self(), SUPERBLOCK_NO(ptr), ptr, __FUNCTION__), \
+pthread_mutex_unlock(ptr), fprintf(stderr, "[%x] attempt unlock %d(%p) in %s\n", pthread_self(), SUPERBLOCK_NO(ptr), ptr, __FUNCTION__))
+
+#define RDLOCK(ptr) (fprintf(stderr, "[%x] attempt rdlock %p in %s\n", pthread_self(), ptr, __FUNCTION__), \
+pthread_rwlock_rdlock(ptr), fprintf(stderr, "[%x] rdlock %p in %s\n", pthread_self(), ptr, __FUNCTION__))
+#define WRLOCK(ptr) (fprintf(stderr, "[%x] attempt wrlock %p in %s\n", pthread_self(), ptr, __FUNCTION__), \
+pthread_rwlock_wrlock(ptr), fprintf(stderr, "[%x] wrlock %p in %s\n", pthread_self(), ptr, __FUNCTION__))
+#define RW_UNLOCK(ptr) (pthread_rwlock_unlock(ptr), \
+fprintf(stderr, "[%x] un_rwlock %p in %s\n", pthread_self(), ptr, __FUNCTION__))
 
 //#define RUN_MM_CHECK
 
@@ -147,11 +158,32 @@ fprintf(stderr, "[%x] unlock %s(%p) in %s\n", pthread_self(), ptr == &heap_rw_lo
 
 #define DEBUG(f, ...) (0)
 
+#define LOCK(ptr) (pthread_mutex_lock(ptr))
+#define UNLOCK(ptr) (pthread_mutex_unlock(ptr))
+
 #define RDLOCK(ptr) (pthread_rwlock_rdlock(ptr))
 #define WRLOCK(ptr) (pthread_rwlock_wrlock(ptr))
-#define UNLOCK(ptr) (pthread_rwlock_unlock(ptr))
+#define RW_UNLOCK(ptr) (pthread_rwlock_unlock(ptr))
 
 #endif
+
+/**********************************************************
+ * superblock_lookup
+ * For a newly encountered thread, insert its arena
+ * (pointer to its first superblock) to the global metadata
+ * Return the list_no of the arena
+ **********************************************************/
+
+int insert_arena(pthread_t pthread_id, superblock* sbp) {
+	int cnt = global_metadata.cnt++;
+	if (cnt == 8) {
+		fprintf(stderr, "TOO MANY THREADS!\n");
+		exit(0);
+	}
+	global_metadata.pthread_id[cnt] = pthread_id;
+	global_metadata.ptr[cnt] = sbp;
+	return cnt;
+}
 
 /**********************************************************
  * superblock_lookup
@@ -160,7 +192,7 @@ fprintf(stderr, "[%x] unlock %s(%p) in %s\n", pthread_self(), ptr == &heap_rw_lo
  * If the thread id is not found, return -1
  **********************************************************/
 
-int superblock_lookup(int pthread_id) {
+int superblock_lookup(pthread_t pthread_id) {
 	int cnt = global_metadata.pthread_cnt;
 	for (int i=0; i<cnt; ++i) {
 		if (global_metadata.pthread_id[i] == pthread_id)
@@ -205,7 +237,7 @@ superblock* allocate_superblock() {
 void pthread_rwlock_promote(pthread_rwlock_t* lock) {
 	static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 	pthread_mutex_lock(&mutex);
-	UNLOCK(lock);
+	RW_UNLOCK(lock);
 	WRLOCK(lock);
 	pthread_mutex_unlock(&mutex);
 }
@@ -282,7 +314,7 @@ void relocate_free_segment(block* bp, size_t size, int search_from) {
     }
 	WRLOCK(&list_rwlock[i]);
     list_insert(bp, i);
-	UNLOCK(&list_rwlock[i]);
+	RW_UNLOCK(&list_rwlock[i]);
 }
 
 /**********************************************************
@@ -327,7 +359,7 @@ void coalesce() {
 			list_insert(bp, find_list(bp->size));
 		}
 	}
-	UNLOCK(&heap_rw_lock);
+	RW_UNLOCK(&heap_rw_lock);
 #ifdef RUN_MM_CHECK
 	mm_check();
 #endif
@@ -361,29 +393,13 @@ void* extend_heap(size_t words) {
  * Assumed that asize is aligned
  **********************************************************/
 block *find_fit(size_t asize, block* listp) {
-#ifdef BEST_FIT
-    block *bp, *ret = NULL;
-	int sized;
-	/* Starting from the first "real" block in the list */
-	for (bp = listp -> next; bp != NULL; bp = bp -> next) {
-		if (!GET_ALLOC(bp) && (asize <= GET_SIZE(bp))) {
-			if (ret == NULL || GET_SIZE(bp) - asize < sized) {
-				sized = GET_SIZE(bp) - asize;
-				ret = bp;
-			}
-		}
-	}
-	return ret;
-#else
-    // use first fit method as default
     block *bp;
-    /* Starting from the first "real" block in the list */
-    for (bp = listp -> next; bp != NULL; bp = bp -> next) {
+    /* Starting from the first block in the list, note that listp can be NULL */
+    for (bp = listp; bp != NULL; bp = bp -> next) {
         if (!GET_ALLOC(bp) && (asize <= GET_SIZE(bp)))
             return bp;
     }
     return NULL;
-#endif
 }
 
 /**********************************************************
@@ -395,20 +411,13 @@ block *find_fit(size_t asize, block* listp) {
  * otherwise bp was in list[list_no] and the thread is holding a write lock of list[list_no]
  * Postcondition: if list_no != LIST_CNT, the write lock is released
  **********************************************************/
-ablock* place(block* bp, int asize, int free_size, int list_no, int des_direction) {
+ablock* place(block* bp, int asize, int free_size, int des_direction) {
 	static char rec_direction = 0;
 	char direction = des_direction == -1? rec_direction : des_direction;
 	DEBUG("[%x] allocate %d in block %d(%p) sized %d at list[%d], direction: %s\n",
 	      pthread_self(), asize, (int)((void*)bp - heap_starts), bp, free_size, list_no, direction == 0? "LOW":"HIGH");
     if (free_size - asize <= EMPTY_BLOCKSIZE) // If the remaining space after the split could not hold a block
         asize = free_size;
-
-	if (list_no == LIST_CNT)
-		--list_no;
-    else {
-		list_remove(bp);
-		UNLOCK(&list_rwlock[list_no]);
-	}
 
     if (direction == 0) { // Split the block from the lower address
 	    DEBUG("[%x] PUT(%p, 0x%x)\n", pthread_self(), &bp->size, PACK(asize, 1));
@@ -452,9 +461,9 @@ void* mm_free_thread(void* ptr) {
 	int list_no = find_list(bp->size);
 	WRLOCK(&list_rwlock[list_no]);
 	list_insert(bp, list_no);
-	UNLOCK(&list_rwlock[list_no]);
+	RW_UNLOCK(&list_rwlock[list_no]);
 	DEBUG("[%x] %d success\n", pthread_self(), (int)(ptr - heap_starts));
-	UNLOCK(&heap_rw_lock);
+	RW_UNLOCK(&heap_rw_lock);
 #ifdef RUN_MM_CHECK
 	mm_check();
 #endif
@@ -482,51 +491,52 @@ void mm_free(void* ptr) {
 }
 
 void* mm_malloc_thread(int asize) {
-	size_t extendsize; /* amount to extend heap if no fit */
 	block *bp;
-	int list_no, n_list_no;
-//	fprintf(stderr, "%d\n", asize);
-	if (++coalesce_counter >= 20) {
-		coalesce_counter = 0;
-		coalesce();
-	}
 	DEBUG("[%x] mm_malloc %d @ %d\n", pthread_self(), asize, ++cmd_cnt);
 
-	/* Find the appropriate list to start to search for a fit free block */
-	list_no = find_list(asize);
 #ifdef RUN_MM_CHECK
 	mm_check();
 #endif
 	RDLOCK(&heap_rw_lock);
 
-	for (n_list_no = list_no; n_list_no < LIST_CNT; ++n_list_no) {
-		/* Search the free list for a fit */
-		WRLOCK(&list_rwlock[n_list_no]);
-		if ((bp = find_fit(asize, list_heads[n_list_no])) != NULL) {
-//			pthread_rwlock_promote(&list_rwlock[n_list_no]);
-			void *ret = place(bp, asize, GET_SIZE(bp), n_list_no, -1)->data;
-			DEBUG("[%x] mm_malloc %d -> %d(%p) success\n", pthread_self(), asize, (int) (ret - heap_starts), ret);
-			UNLOCK(&heap_rw_lock);
+	pthread_t id = pthread_self();
+	int list_no = superblock_lookup(id);
+	superblock* sbp;
+	if (list_no == -1) {
+		sbp = allocate_superblock();
+		list_no = (id, sbp);
+	}
+	else sbp = global_metadata.ptr[list_no];
+
+	for (; sbp -> next != NULL; sbp = sbp -> next) {
+		LOCK(sbp -> lock);
+		if ((bp = find_fit(asize, sbp -> head)) != NULL) {
+			void *ret = place(bp, asize, GET_SIZE(bp), -1) -> data;
+			DEBUG("[%x] mm_malloc %d -> %d(%p) success\n", pthread_self(), asize, (int) (ret - SUPERBLOCK_DATA(ret)), ret);
+			UNLOCK(sbp -> lock);
+			RW_UNLOCK(&heap_rw_lock);
 #ifdef RUN_MM_CHECK
 			mm_check();
 #endif
 			return ret;
 		}
-		UNLOCK(&list_rwlock[n_list_no]);
+		UNLOCK(sbp -> lock);
 	}
-	/* No fit found. Get more memory and place the block */
-	// Adjust the chunk size adaptively
-	if (asize > chunksize)
-		chunksize = MIN(MAXCHUNKSIZE, chunksize * 2);
 
-	extendsize = MAX(asize, chunksize);
-	if ((bp = extend_heap(extendsize / WSIZE)) == NULL) {
-		DEBUG("failed!!!\n", 0);
+	/* No fit found. Allocate a new superblock */
+	// Adjust the chunk size adaptively
+	if ((sbp = allocate_superblock()) == NULL) {
+		DEBUG("allocate superblock failed!!!\n", 0);
 		return NULL;
 	}
-	void* ret = place(bp, asize, GET_SIZE(bp), LIST_CNT, -1) -> data;
-	DEBUG("%d(%p)\n", (int)(ret - heap_starts), ret);
-	UNLOCK(&heap_rw_lock);
+	// No need to lock, because no other thread will access this new superblock
+	if ((bp = find_fit(asize, sbp -> head)) == NULL) {
+		DEBUG("size too large!!!\n", 0);
+		return NULL;
+	}
+	void* ret = place(bp, asize, GET_SIZE(bp), -1) -> data;
+	DEBUG("[%x] mm_malloc %d -> %d(%p) success\n", pthread_self(), asize, (int) (ret - SUPERBLOCK_DATA(ret)), ret);
+	RW_UNLOCK(&heap_rw_lock);
 #ifdef RUN_MM_CHECK
 	mm_check();
 #endif
