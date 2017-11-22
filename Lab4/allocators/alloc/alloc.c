@@ -114,7 +114,7 @@ typedef struct global_header_ {
 #define SET_FOOTER(pt) ({PUT(FTRP(pt), ((block*) (pt)) -> size);})
 
 /* #Superblock of a ptr */
-#define SUPERBLOCK_NO(ptr) ((int)(((void*)ptr - (void*)superblocks) >> 12))
+#define SUPERBLOCK_NO(ptr) (((int)((void*)ptr - (void*)superblocks)) / PAGESIZE)
 
 /* Pointer to the superblock of a ptr */
 #define SUPERBLOCK_OF(ptr) (&superblocks[SUPERBLOCK_NO(ptr)])
@@ -131,13 +131,15 @@ int cmd_cnt;
 /* Global heap rwlock */
 pthread_rwlock_t heap_rw_lock;
 
+/* Global meta data and its lock */
 global_header global_metadata;
+pthread_rwlock_t global_metadata_rwlock;
 
 /* Pointer to the start of superblocks, should be equal to lowest address of heap */
 superblock* superblocks;
 
 /* Debug output helpers */
-#define DEBUG_MODE
+//#define DEBUG_MODE
 
 #ifdef DEBUG_MODE
 
@@ -158,7 +160,7 @@ pthread_rwlock_wrlock(ptr), fprintf(stderr, "[%x] wrlock %p in %s\n", (unsigned)
 #define RW_UNLOCK(ptr) (pthread_rwlock_unlock(ptr), \
 fprintf(stderr, "[%x] un_rwlock %p in %s\n", (unsigned)pthread_self(), ptr, __FUNCTION__))
 
-//#define RUN_MM_CHECK
+#define RUN_MM_CHECK
 
 #else
 
@@ -181,6 +183,7 @@ fprintf(stderr, "[%x] un_rwlock %p in %s\n", (unsigned)pthread_self(), ptr, __FU
  **********************************************************/
 
 int insert_arena(pthread_t pthread_id, superblock* sbp) {
+	WRLOCK(&global_metadata_rwlock);
 	DEBUG("[%x] Inserted sb[%d] to th[%x]\n", (unsigned)pthread_self(), SUPERBLOCK_NO(sbp), (unsigned)pthread_id);
 	int cnt = global_metadata.pthread_cnt++;
 	if (cnt == MAX_THREAD) {
@@ -189,6 +192,7 @@ int insert_arena(pthread_t pthread_id, superblock* sbp) {
 	}
 	global_metadata.pthread_id[cnt] = pthread_id;
 	global_metadata.ptr[cnt] = sbp;
+	RW_UNLOCK(&global_metadata_rwlock);
 	return cnt;
 }
 
@@ -200,11 +204,15 @@ int insert_arena(pthread_t pthread_id, superblock* sbp) {
  **********************************************************/
 
 int superblock_lookup(pthread_t pthread_id) {
+	RDLOCK(&global_metadata_rwlock);
 	int cnt = global_metadata.pthread_cnt;
 	for (int i=0; i<cnt; ++i) {
-		if (global_metadata.pthread_id[i] == pthread_id)
+		if (global_metadata.pthread_id[i] == pthread_id) {
+			RW_UNLOCK(&global_metadata_rwlock);
 			return i;
+		}
 	}
+	RW_UNLOCK(&global_metadata_rwlock);
 	return -1;
 }
 
@@ -267,14 +275,11 @@ superblock* allocate_superblock() {
  **********************************************************/
 void list_insert(block* bp) {
     superblock* sbp = SUPERBLOCK_OF(bp);
-    block* pos = sbp->head;
-    if (pos -> next) {
-        pos -> next -> prev = bp;
-        bp -> next = pos -> next;
-    }
-    else bp -> next = NULL;
-    pos -> next = bp;
-    bp -> prev = pos;
+	if (sbp -> head != NULL) {
+		bp -> next = sbp -> head;
+		bp -> next -> prev = bp;
+	}
+	sbp -> head = bp;
 #ifdef DEBUG_MODE
 	DEBUG("[%x] Inserted %d(%p) to superblock %d(%p)\n", (unsigned)pthread_self(), BLOCK_OFFSET(bp), bp, SUPERBLOCK_NO(bp), sbp);
 #endif
@@ -330,6 +335,8 @@ int mm_init(void) {
     cmd_cnt = 0;
 	superblocks = NULL; // To denote that no superblock is allocated initally, which will be checked in allocate_superblock()
 	memset(&global_metadata, 0, sizeof(global_metadata));
+	pthread_mutex_init(&heap_rw_lock, NULL);
+	pthread_rwlock_init(&global_metadata_rwlock, NULL);
     return 0;
 }
 
@@ -396,7 +403,7 @@ ablock* place(block* bp, int asize, int free_size, int des_direction) {
 	      (unsigned)pthread_self(), asize, BLOCK_OFFSET(bp), bp, free_size, SUPERBLOCK_NO(bp), SUPERBLOCK_OF(bp), direction == 0? "LOW":"HIGH");
     if (free_size - asize <= EMPTY_BLOCKSIZE) // If the remaining space after the split could not hold a block
         asize = free_size;
-
+	list_remove(bp);
     if (direction == 0) { // Split the block from the lower address
 	    DEBUG("[%x] PUT(%p, 0x%x)\n", (unsigned)pthread_self(), &bp->size, (unsigned)PACK(asize, 1));
         bp -> size = PACK(asize, 1);
@@ -475,7 +482,7 @@ void* mm_malloc_thread(int asize) {
 	}
 	else sbp = global_metadata.ptr[list_no];
 
-	for (; sbp -> next != NULL; sbp = sbp -> next) {
+	for (; sbp != NULL; sbp = sbp -> next) {
 		LOCK(&sbp -> lock);
 		if ((bp = find_fit(asize, sbp -> head)) != NULL) {
 			void *ret = place(bp, asize, GET_SIZE(bp), -1) -> data;
@@ -501,6 +508,8 @@ void* mm_malloc_thread(int asize) {
 		DEBUG("size too large!!!\n", 0);
 		return NULL;
 	}
+	sbp -> next = global_metadata.ptr[list_no];
+	global_metadata.ptr[list_no] = sbp;
 	void* ret = place(bp, asize, GET_SIZE(bp), -1) -> data;
 	DEBUG("[%x] mm_malloc %d -> %d(%p) success\n", (unsigned)pthread_self(), asize, BLOCK_OFFSET(ret), ret);
 	RW_UNLOCK(&heap_rw_lock);
@@ -540,6 +549,7 @@ int mm_check(void) {
 	int cnt = global_metadata.pthread_cnt;
 	for (int i=0; i<cnt; ++i) {
 		pthread_t th_id = global_metadata.pthread_id[i];
+		DEBUG("Thread [%x] in arena[%d]\n", (unsigned)th_id, i);
 		for (sbp = global_metadata.ptr[i]; sbp != NULL; sbp = sbp->next) {
 			int sb_no = SUPERBLOCK_NO(sbp);
 			// Check if the superblock is aligned to 4K
@@ -571,13 +581,13 @@ int mm_check(void) {
 				// Check if the block is free
 				if (GET_ALLOC(bp)) {
 					fprintf(stderr, "[%x] Error: Block %d(%p) sized %d in superblock %d(%p) is allocated\n",
-					        (unsigned)pthread_self(), BLOCK_OFFSET(nbp), nbp, (int) GET_SIZE(nbp), sb_no, sbp);
+					        (unsigned)pthread_self(), BLOCK_OFFSET(bp), bp, (int) GET_SIZE(bp), sb_no, sbp);
 					while (1);
 				}
 
 				if (bp -> next && bp -> next -> prev != bp) {
 					fprintf(stderr, "[%x] Error: Block %d(%p) sized %d in superblock %d(%p) is not correctly double-linked\n",
-					        (unsigned)pthread_self(),BLOCK_OFFSET(nbp), nbp, (int) GET_SIZE(nbp), sb_no, sbp);
+					        (unsigned)pthread_self(),BLOCK_OFFSET(bp), bp, (int) GET_SIZE(bp), sb_no, sbp);
 					while (1);
 				}
 				// Check if the block presents in the implicit list (linked in the heap by sizes)
@@ -587,7 +597,7 @@ int mm_check(void) {
 				if ((void *) nbp > (void*)&sbp->epilogue) {
 					fprintf(stderr,
 					        "[%x] Error: Block %d(%p) sized %d in superblock %d(%p)could not be found in contiguity list\n",
-					        (unsigned) pthread_self(), BLOCK_OFFSET(nbp), nbp, (int) GET_SIZE(nbp), sb_no, sbp);
+					        (unsigned) pthread_self(), BLOCK_OFFSET(bp), bp, (int) GET_SIZE(bp), sb_no, sbp);
 					while (1);
 				}
 			}
