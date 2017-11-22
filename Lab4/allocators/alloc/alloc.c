@@ -36,6 +36,7 @@ name_t myname = {
 #define DSIZE       (2 * WSIZE)            /* doubleword size (bytes) */
 #define QSIZE       (4 * WSIZE)            /* quadword size (bytes) */
 #define MAXCHUNKSIZE   (32768)      /* maximal heap chunk size (bytes) */
+#define PAGESIZE (4096)
 
 
 #define MAX(x, y) ((x) > (y)?(x) :(y))
@@ -68,8 +69,23 @@ typedef struct ablock_st{
     size_t size;
     char data[0];
 } ablock;
-// Footer can not be accessed directly without using the macro below
 
+typedef struct superblock_ {
+	struct superblock_ *prev;
+	pthread_mutex_t lock; // 40B
+	block* head; // Head of explicit list of free blocks
+	char data[4032]; // 4K minus size of other metadata
+	size_t epilogue[1]; // 8B remained, used as epilogue
+	//Remember to change the size of data and padding when the structure of metadata changed
+} superblock;
+
+typedef struct global_header_ {
+	int pthread_id[8];
+	superblock* ptr[8];
+	int pthread_cnt;
+} global_header;
+
+// Footer can not be accessed directly without using the macro below
 /* Size of an empty free block */
 #define EMPTY_BLOCKSIZE  (QSIZE)
 
@@ -93,27 +109,21 @@ typedef struct ablock_st{
 /* Set the footer of a block pointer pt */
 #define SET_FOOTER(pt) ({PUT(FTRP(pt), ((block*) (pt)) -> size);})
 
-/* Last block in the heap */
-#define LAST_BLOCK (PREV_BLKP(dseg_hi + 1 - WSIZE))
+/* #Superblock of a ptr */
+#define SUPERBLOCK_NO(ptr) (((void*)ptr - (void*)superblocks) >> 12)
 
-/* Number of segregated lists */
-#define LIST_CNT 5
-
-/* Head nodes of segregated lists */
-block* list_heads[LIST_CNT];
-/* Block size constraint of each list */
-const int list_size[LIST_CNT] = {16, 32, 48, 64, 80};
-pthread_rwlock_t list_rwlock[LIST_CNT];
-pthread_rwlock_t heap_rw_lock;
-
-/* Minimum size each time heap break increases */
-int chunksize;
+/* Pointer to the superblock of a ptr */
+#define SUPERBLOCK_OF(ptr) (&superblocks[SUPERBLOCK_NO(ptr)])
 
 /* Used for logging */
 int cmd_cnt;
 long long heap_starts;
 int coalesce_counter;
 
+global_header global_metadata;
+
+/* Pointer to the start of superblocks, should be equal to lowest address of heap */
+superblock* superblocks;
 
 /* Debug output helpers */
 //#define DEBUG_MODE
@@ -141,6 +151,48 @@ fprintf(stderr, "[%x] unlock %s(%p) in %s\n", pthread_self(), ptr == &heap_rw_lo
 
 #endif
 
+/**********************************************************
+ * superblock_lookup
+ * Lookup superblock belonging to the current thread
+ * Return the listno of the pointer to that superblock
+ * If the thread id is not found, return -1
+ **********************************************************/
+
+int superblock_lookup(int pthread_id) {
+	int cnt = global_metadata.pthread_cnt;
+	for (int i=0; i<cnt; ++i) {
+		if (global_metadata.pthread_id[i] == pthread_id)
+			return i;
+	}
+	return -1;
+}
+
+/**********************************************************
+ * allocate_superblock
+ * Extend the heap and allocate a new superblock on the top of the current heap
+ * Extend the heap by "words" words, maintaining alignment
+ * requirements of course.
+ * Return the pointer to the superblock
+ **********************************************************/
+superblock* allocate_superblock() {
+	superblock* sbp;
+	if ((sbp = extend_heap(PAGESIZE/WSIZE)) == NULL)
+		return NULL;
+	if (superblocks == NULL) // So it is allocating the first superblock
+		superblocks = sbp;
+	sbp -> next = NULL;
+	pthread_mutex_init(&sbp -> lock, NULL);
+
+	PUT(&sbp -> epilogue, 1);
+
+	sbp -> head = &sbp -> data;
+	sbp -> head -> size = sizeof(sbp->data);
+	sbp -> head -> prev = sbp -> head -> next = NULL;
+	SET_FOOTER(sbp -> head);
+	//Set up the entire data part as a free block
+
+	return sbp;
+}
 
 /**********************************************************
  * pthread_rwlock_promote
@@ -231,8 +283,7 @@ void relocate_free_segment(block* bp, size_t size, int search_from) {
 
 /**********************************************************
  * mm_init
- * Initialize the heap, including "allocation" of the
- * prologue and epilogue
+ * Initialize the heap.
  **********************************************************/
 int mm_init(void) {
 //	freopen ("mm.log", "w", stdout);
@@ -241,35 +292,9 @@ int mm_init(void) {
 //	freopen("sizes.log", "w", stderr);
 	DEBUG("Starting mm_init..\n", 0);
     mem_init();
-
-    void* heap_listp;
     cmd_cnt = 0;
-    // Initial chunk size
-    chunksize = 8224;
-    // Make up the space for list heads, prologue & epilogue
-    if ((heap_listp = mem_sbrk(6 * WSIZE + LIST_CNT * EMPTY_BLOCKSIZE)) == (void *) -1)
-        return -1;
-    block* pt = heap_listp;
-    // Set up an empty block as the head (sentinel) node of each segregated list
-    for (int i=0; i < LIST_CNT; ++i) {
-        pt -> prev = NULL;
-        pt -> next = NULL;
-        pt -> size = PACK(EMPTY_BLOCKSIZE, 0); // sentinel header
-        SET_FOOTER(pt); // sentinel footer
-        list_heads[i] = pt;
-	    DEBUG("list #%d(size: %d): %p\n", i, list_size[i], list_heads[i]);
-	    pthread_rwlock_init(&list_rwlock[i], NULL);
-        pt = MOVE(pt, EMPTY_BLOCKSIZE);
-    }
-    pt = MOVE(pt, WSIZE);
-    pt -> prev = NULL;
-    pt -> next = NULL;
-    pt -> size = PACK(EMPTY_BLOCKSIZE, 1); // prologue header
-    SET_FOOTER(pt); // prologue footer
-    heap_starts = pt = MOVE(pt, EMPTY_BLOCKSIZE);
-    pt -> size = PACK(1, 1); // epilogue header
-	DEBUG("Init: allocate %d bytes, %p -> %p\n", mem_usage(), heap_listp, MOVE(pt, WSIZE));
-	pthread_rwlock_init(&heap_rw_lock, NULL);
+	superblocks = NULL; // To denote that no superblock is allocated initally, which will be checked in allocate_superblock()
+	memset(&global_metadata, 0, sizeof(global_metadata));
     return 0;
 }
 
@@ -307,11 +332,9 @@ void coalesce() {
 /**********************************************************
  * extend_heap
  * Extend the heap by "words" words, maintaining alignment
- * requirements of course. Free the former epilogue block
- * and reallocate its new header.
- * Return a stray free block.
+ * requirements of course.
  **********************************************************/
-block* extend_heap(size_t words) {
+void* extend_heap(size_t words) {
     block *bp;
     size_t size;
 	static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -322,21 +345,10 @@ block* extend_heap(size_t words) {
 	    pthread_mutex_unlock(&mutex);
 	    return NULL;
     }
-
-	bp = MOVE(bp, -WSIZE); // Remove old epilogue header
-
-	/* Initialize free block header/footer and the epilogue header */
-	DEBUG("[%x] PUT(%p, 0x%x)\n", pthread_self(), &bp->size, PACK(size, 0));
-	bp -> size = PACK(size, 0);                  // free block header
-	SET_FOOTER(bp);               // free block footer
-
-	NEXT_BLKP(bp) -> size = PACK(1, 1); // Set new epilogue footer
-
 	pthread_mutex_unlock(&mutex);
 
     return bp;
 }
-
 
 /**********************************************************
  * find_fit
