@@ -120,10 +120,15 @@ typedef struct global_header_ {
 /* Pointer to the data of the superblock of ptr */
 #define SUPERBLOCK_DATA(ptr) (SUPERBLOCK_OF(ptr) -> data)
 
+/* Offset of a pointer in the payload of a superblock */
+#define BLOCK_OFFSET(ptr) ((int)((void*)ptr - SUPERBLOCK_DATA(ptr)))
+
 /* Used for logging */
 int cmd_cnt;
-long long heap_starts;
 int coalesce_counter;
+
+/* Global heap rwlock */
+pthread_rwlock_t heap_rwlock;
 
 global_header global_metadata;
 
@@ -176,6 +181,7 @@ fprintf(stderr, "[%x] un_rwlock %p in %s\n", pthread_self(), ptr, __FUNCTION__))
 
 int insert_arena(pthread_t pthread_id, superblock* sbp) {
 	int cnt = global_metadata.cnt++;
+	DEBUG("[%x] Inserted sb[%d] to th[%d]\n", pthread_self(), SUPERBLOCK_NO(sbp), pthread_id);
 	if (cnt == 8) {
 		fprintf(stderr, "TOO MANY THREADS!\n");
 		exit(0);
@@ -249,6 +255,7 @@ superblock* allocate_superblock() {
 	sbp -> head -> prev = sbp -> head -> next = NULL;
 	SET_FOOTER(sbp -> head);
 	//Set up the entire data part as a free block
+	DEBUG("[%x] allocated superblock %d(%p)\n", SUPERBLOCK_NO(sbp), sbp);
 
 	return sbp;
 }
@@ -268,25 +275,23 @@ void list_insert(block* bp) {
     pos -> next = bp;
     bp -> prev = pos;
 #ifdef DEBUG_MODE
-    //DEBUG("[%x] Inserted %d(%p) to list[%d] ", pthread_self(), (int)((void*)bp - heap_starts), bp, list_no);
-   // if (bp->prev <= list_heads[LIST_CNT - 1])
-    //    DEBUG("prev -> list[%d](%p) ", ((void*)bp->prev - (void*)list_heads[0]) / EMPTY_BLOCKSIZE, bp->prev);
-    //else DEBUG("prev -> %d(%p) ", (int)((void*)(bp->prev) - (void*)heap_starts), bp->prev);
-    //if (bp->next == NULL)
-	//DEBUG("next -> NULL\n", 0);
-    //else DEBUG("next -> %d(%p)\n", (int)((void*)(bp->next) - heap_starts), bp->next);
+	DEBUG("[%x] Inserted %d(%p) to sb %d(%p)\n", pthread_self(), (int)((void*)bp - SUPERBLOCK_DATA(bp)),SUPERBLOCK_NO(bp), sbp);
 #endif
 }
 
 /**********************************************************
  * list_remove
  * Remove the block bp from free list
+ * Update head in superblock when necessary
  **********************************************************/
 void list_remove(block* bp) {
     if (bp -> prev)
         bp -> prev -> next = bp -> next;
     if (bp -> next)
         bp -> next -> prev = bp -> prev;
+	superblock* sbp = SUPERBLOCK_OF(bp);
+	if (sbp -> head == bp)
+		sbp -> head = bp -> next;
     bp -> prev = bp -> next = NULL;
 }
 
@@ -300,7 +305,7 @@ void list_remove(block* bp) {
  **********************************************************/
 void relocate_free_segment(block* bp, size_t size) {
     int i;
-	DEBUG("[%x] PUT(%p, 0x%x)\n", pthread_self(), &bp->size, size);
+	DEBUG("[%x] Relocate free segment %d in sbp\n", pthread_self(), &bp->size, size);
     bp->size = size;
     SET_FOOTER(bp);
     list_insert(bp);
@@ -316,6 +321,10 @@ int mm_init(void) {
 //	freopen("size.log", "a", stderr);
 //	freopen("sizes.log", "w", stderr);
 	DEBUG("Starting mm_init..\n", 0);
+	if (sizeof(superblock) != PAGESIZE) {
+		fprintf(stderr, "Invalid superblock size!");
+		exit(0);
+	}
     mem_init();
     cmd_cnt = 0;
 	superblocks = NULL; // To denote that no superblock is allocated initally, which will be checked in allocate_superblock()
@@ -326,7 +335,7 @@ int mm_init(void) {
 /**********************************************************
  * coalesce
  * Centralized coalesce, scan throught the entire heap to coalesce all free blocks
- * Will acquire a global write lock, so it will block and be blocked by any other threads
+ * Precondition: the thread is holding the lock of the superblock
  **********************************************************/
 void *coalesce(block *bp) {
     //global lock
@@ -353,7 +362,6 @@ void *coalesce(block *bp) {
         bp = PREV_BLKP(bp);
     }
     relocate_free_segment(bp, size); // Set up block for the new coalesced free segment
-    //global lock
     return bp;
 }
 
@@ -362,6 +370,7 @@ void *coalesce(block *bp) {
  * Traverse the free list listp searching for a block to fit asize
  * Return NULL if no free blocks can handle that size
  * Assumed that asize is aligned
+ * Precondition: the thread is holding the lock of the superblock
  **********************************************************/
 block *find_fit(size_t asize, block* listp) {
     block *bp;
@@ -378,15 +387,13 @@ block *find_fit(size_t asize, block* listp) {
  * Split a block sized asize from block bp with size free_size, located on list# <= list_no
  * des_direction: specify whether split the upper part(1) or lower part(0) of the block
  * -1: split in alternative ways
- * Precondition: if list_no == LIST_CNT, bp was not in any list
- * otherwise bp was in list[list_no] and the thread is holding a write lock of list[list_no]
- * Postcondition: if list_no != LIST_CNT, the write lock is released
+ * Precondition: the thread is holding the lock of the superblock
  **********************************************************/
 ablock* place(block* bp, int asize, int free_size, int des_direction) {
 	static char rec_direction = 0;
 	char direction = des_direction == -1? rec_direction : des_direction;
 	DEBUG("[%x] allocate %d in block %d(%p) sized %d at list[%d], direction: %s\n",
-	      pthread_self(), asize, (int)((void*)bp - heap_starts), bp, free_size, list_no, direction == 0? "LOW":"HIGH");
+	      pthread_self(), asize, BLOCK_OFFSET(bp), bp, free_size, list_no, direction == 0? "LOW":"HIGH");
     if (free_size - asize <= EMPTY_BLOCKSIZE) // If the remaining space after the split could not hold a block
         asize = free_size;
 
@@ -420,26 +427,24 @@ void* mm_free_thread(void* ptr) {
 	mm_check();
 #endif
 	RDLOCK(&heap_rw_lock);
-	DEBUG("[%x] mm_free %d(%p) @ %d\n", pthread_self(),  (int)(ptr - heap_starts), ptr, ++cmd_cnt);
+	DEBUG("[%x] mm_free %d(%p) @ %d\n", pthread_self(),  BLOCK_OFFSET(ptr), ptr, ++cmd_cnt);
 	block* bp = DATA2BLOCK((block *)ptr);
+
+	pthread_mutex_lock(&SUPERBLOCK_OF(SUPERBLOCK_OF)->lock);
 	DEBUG("[%x] PUT(%p, 0x%x)\n", pthread_self(), &bp->size, GET_SIZE(bp));
 	bp -> size = GET_SIZE(bp);
 	SET_FOOTER(bp);
 	// prev and next of an allocated block should be overlapped by data
 	bp->next = NULL;
 	bp->prev = NULL;
-
-
-    pthread_mutex_lock(&SUPERBLOCK_OF(SUPERBLOCK_OF)->lock);
-	list_insert(bp, list_no);
+	list_insert(bp);
     pthread_mutex_unlock(&SUPERBLOCK_OF(SUPERBLOCK_OF)->lock);
-	DEBUG("[%x] %d success\n", pthread_self(), (int)(ptr - heap_starts));
+
+	DEBUG("[%x] %d mm_free success\n", pthread_self(), BLOCK_OFFSET(ptr));
 	RW_UNLOCK(&heap_rw_lock);
 #ifdef RUN_MM_CHECK
 	mm_check();
 #endif
-//	pthread_mutex_unlock(&malloc_lock);
-//	DEBUG("%x released lock in free\n", pthread_self());
 	return NULL;
 }
 
@@ -452,13 +457,6 @@ void mm_free(void* ptr) {
         return;
     }
 	mm_free_thread(ptr);
-//	pthread_t th;
-//	void* exit_status;
-//	DEBUG("New free request: %d(%p)\n", (int)(ptr - heap_starts), ptr);
-//	pthread_create(&th, NULL, mm_free_thread, ptr);
-//	DEBUG("[%x] Free request %d(%p) handled by [%x]\n", pthread_self(), (int)(ptr - heap_starts), ptr, th);
-//	pthread_join(th, &exit_status);
-//	DEBUG("[%x] Joined in free request %d(%p) handled by [%x]\n", pthread_self(), (int)(ptr - heap_starts), ptr, th);
 }
 
 void* mm_malloc_thread(int asize) {
@@ -529,14 +527,6 @@ void *mm_malloc(size_t size) {
     /* Adjust block size to include overhead and alignment reqs. */
     size_t asize = ALIGN_16B(size + DSIZE);
 	return mm_malloc_thread(asize);
-//	pthread_t th;
-//	void* exit_status;
-//	DEBUG("New malloc request: %d\n", asize);
-//	pthread_create(&th, NULL,mm_malloc_thread, &asize);
-//	DEBUG("[%x] Malloc request %d handled by [%x]\n", pthread_self(), asize, th);
-//	pthread_join(th, &exit_status);
-//	DEBUG("[%x] Joined in malloc request %d, return %p handled by [%x]\n", pthread_self(), th, size, exit_status, th);
-//	return exit_status;
 }
 
 /**********************************************************
