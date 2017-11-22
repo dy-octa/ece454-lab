@@ -167,6 +167,8 @@ fprintf(stderr, "[%x] un_rwlock %p in %s\n", pthread_self(), ptr, __FUNCTION__))
 
 #endif
 
+pthread_rwlock_t heap_rw_lock;
+
 /**********************************************************
  * superblock_lookup
  * For a newly encountered thread, insert its arena
@@ -175,7 +177,7 @@ fprintf(stderr, "[%x] un_rwlock %p in %s\n", pthread_self(), ptr, __FUNCTION__))
  **********************************************************/
 
 int insert_arena(pthread_t pthread_id, superblock* sbp) {
-	int cnt = global_metadata.cnt++;
+	int cnt = global_metadata.pthread_cnt++;
 	if (cnt == 8) {
 		fprintf(stderr, "TOO MANY THREADS!\n");
 		exit(0);
@@ -385,8 +387,8 @@ block *find_fit(size_t asize, block* listp) {
 ablock* place(block* bp, int asize, int free_size, int des_direction) {
 	static char rec_direction = 0;
 	char direction = des_direction == -1? rec_direction : des_direction;
-	DEBUG("[%x] allocate %d in block %d(%p) sized %d at list[%d], direction: %s\n",
-	      pthread_self(), asize, (int)((void*)bp - heap_starts), bp, free_size, list_no, direction == 0? "LOW":"HIGH");
+	//DEBUG("[%x] allocate %d in block %d(%p) sized %d at list[%d], direction: %s\n",
+	//      pthread_self(), asize, (int)((void*)bp - heap_starts), bp, free_size, list_no, direction == 0? "LOW":"HIGH");
     if (free_size - asize <= EMPTY_BLOCKSIZE) // If the remaining space after the split could not hold a block
         asize = free_size;
 
@@ -430,9 +432,9 @@ void* mm_free_thread(void* ptr) {
 	bp->prev = NULL;
 
 
-    pthread_mutex_lock(&SUPERBLOCK_OF(SUPERBLOCK_OF)->lock);
-	list_insert(bp, list_no);
-    pthread_mutex_unlock(&SUPERBLOCK_OF(SUPERBLOCK_OF)->lock);
+    pthread_mutex_lock(&SUPERBLOCK_OF(bp)->lock);
+	list_insert(bp);
+    pthread_mutex_unlock(&SUPERBLOCK_OF(bp)->lock);
 	DEBUG("[%x] %d success\n", pthread_self(), (int)(ptr - heap_starts));
 	RW_UNLOCK(&heap_rw_lock);
 #ifdef RUN_MM_CHECK
@@ -480,18 +482,18 @@ void* mm_malloc_thread(int asize) {
 	else sbp = global_metadata.ptr[list_no];
 
 	for (; sbp -> next != NULL; sbp = sbp -> next) {
-		LOCK(sbp -> lock);
+		LOCK(&sbp -> lock);
 		if ((bp = find_fit(asize, sbp -> head)) != NULL) {
 			void *ret = place(bp, asize, GET_SIZE(bp), -1) -> data;
 			DEBUG("[%x] mm_malloc %d -> %d(%p) success\n", pthread_self(), asize, (int) (ret - SUPERBLOCK_DATA(ret)), ret);
-			UNLOCK(sbp -> lock);
+			UNLOCK(&sbp -> lock);
 			RW_UNLOCK(&heap_rw_lock);
 #ifdef RUN_MM_CHECK
 			mm_check();
 #endif
 			return ret;
 		}
-		UNLOCK(sbp -> lock);
+		UNLOCK(&sbp -> lock);
 	}
 
 	/* No fit found. Allocate a new superblock */
