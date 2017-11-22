@@ -71,10 +71,12 @@ typedef struct ablock_st{
 } ablock;
 
 typedef struct superblock_ {
-	struct superblock_ *prev;
+	struct superblock_ *next;
 	pthread_mutex_t lock; // 40B
 	block* head; // Head of explicit list of free blocks
-	char data[4032]; // 4K minus size of other metadata
+	ablock prologue;
+	size_t prologue_footer;
+	char data[4016]; // 4K minus size of other metadata
 	size_t epilogue[1]; // 8B remained, used as epilogue
 	//Remember to change the size of data and padding when the structure of metadata changed
 } superblock;
@@ -183,6 +185,8 @@ superblock* allocate_superblock() {
 	sbp -> next = NULL;
 	pthread_mutex_init(&sbp -> lock, NULL);
 
+	sbp -> prologue.size = PACK(DSIZE, 1);
+	SET_FOOTER(&sbp -> prologue); // filled to sbp -> prologue_footer
 	PUT(&sbp -> epilogue, 1);
 
 	sbp -> head = &sbp -> data;
@@ -335,19 +339,19 @@ void coalesce() {
  * requirements of course.
  **********************************************************/
 void* extend_heap(size_t words) {
-    block *bp;
+    void *ptr;
     size_t size;
 	static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
     /* Allocate an even number of words to maintain alignments */
     size = (words % 2) ? (words + 1) * WSIZE : words * WSIZE;
 	pthread_mutex_lock(&mutex);
-    if ((bp = mem_sbrk(size)) == (void *) -1) {
+    if ((ptr = mem_sbrk(size)) == (void *) -1) {
 	    pthread_mutex_unlock(&mutex);
 	    return NULL;
     }
 	pthread_mutex_unlock(&mutex);
 
-    return bp;
+    return ptr;
 }
 
 /**********************************************************
