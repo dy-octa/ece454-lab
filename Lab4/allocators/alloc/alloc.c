@@ -127,7 +127,6 @@ typedef struct global_header_ {
 
 /* Used for logging */
 int cmd_cnt;
-int coalesce_counter;
 
 /* Global heap rwlock */
 pthread_rwlock_t heap_rw_lock;
@@ -159,7 +158,7 @@ pthread_rwlock_wrlock(ptr), fprintf(stderr, "[%x] wrlock %p in %s\n", (unsigned)
 #define RW_UNLOCK(ptr) (pthread_rwlock_unlock(ptr), \
 fprintf(stderr, "[%x] un_rwlock %p in %s\n", (unsigned)pthread_self(), ptr, __FUNCTION__))
 
-#define RUN_MM_CHECK
+//#define RUN_MM_CHECK
 
 #else
 
@@ -340,7 +339,6 @@ int mm_init(void) {
  * Precondition: the thread is holding the lock of the superblock
  **********************************************************/
 void *coalesce(block *bp) {
-    //global lock
     int prev_alloc = GET_ALLOC(PREV_BLKP(bp));
     int next_alloc = GET_ALLOC(NEXT_BLKP(bp));
     size_t size = GET_SIZE(bp);
@@ -437,6 +435,7 @@ void* mm_free_thread(void* ptr) {
 	bp->next = NULL;
 	bp->prev = NULL;
 	list_insert(bp);
+	coalesce(bp);
     pthread_mutex_unlock(&SUPERBLOCK_OF(bp)->lock);
 
 	DEBUG("[%x] %d mm_free success\n", (unsigned)pthread_self(), BLOCK_OFFSET(ptr));
