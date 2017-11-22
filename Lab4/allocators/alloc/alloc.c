@@ -214,8 +214,9 @@ void pthread_rwlock_promote(pthread_rwlock_t* lock) {
  * list_insert
  * Insert the free block bp to the free address-ordered list list_no
  **********************************************************/
-void list_insert(block* bp, int list_no) {
-    block* pos = list_heads[list_no];
+void list_insert(block* bp) {
+    superblock* sbp = SUPERBLOCK_OF(bp);
+    block* pos = sbp->head;
 //    /* Find the appropriate position to insert the node */
 //    while (pos->next && pos->next < bp)
 //        pos = pos->next;
@@ -227,13 +228,13 @@ void list_insert(block* bp, int list_no) {
     pos -> next = bp;
     bp -> prev = pos;
 #ifdef DEBUG_MODE
-    DEBUG("[%x] Inserted %d(%p) to list[%d] ", pthread_self(), (int)((void*)bp - heap_starts), bp, list_no);
-    if (bp->prev <= list_heads[LIST_CNT - 1])
-        DEBUG("prev -> list[%d](%p) ", ((void*)bp->prev - (void*)list_heads[0]) / EMPTY_BLOCKSIZE, bp->prev);
-    else DEBUG("prev -> %d(%p) ", (int)((void*)(bp->prev) - (void*)heap_starts), bp->prev);
-    if (bp->next == NULL)
-	DEBUG("next -> NULL\n", 0);
-    else DEBUG("next -> %d(%p)\n", (int)((void*)(bp->next) - heap_starts), bp->next);
+    //DEBUG("[%x] Inserted %d(%p) to list[%d] ", pthread_self(), (int)((void*)bp - heap_starts), bp, list_no);
+   // if (bp->prev <= list_heads[LIST_CNT - 1])
+    //    DEBUG("prev -> list[%d](%p) ", ((void*)bp->prev - (void*)list_heads[0]) / EMPTY_BLOCKSIZE, bp->prev);
+    //else DEBUG("prev -> %d(%p) ", (int)((void*)(bp->prev) - (void*)heap_starts), bp->prev);
+    //if (bp->next == NULL)
+	//DEBUG("next -> NULL\n", 0);
+    //else DEBUG("next -> %d(%p)\n", (int)((void*)(bp->next) - heap_starts), bp->next);
 #endif
 }
 
@@ -276,13 +277,14 @@ void relocate_free_segment(block* bp, size_t size, int search_from) {
 	DEBUG("[%x] PUT(%p, 0x%x)\n", pthread_self(), &bp->size, size);
     bp->size = size;
     SET_FOOTER(bp);
-    for (i=search_from; i > 0; --i) {
+    /*for (i=search_from; i > 0; --i) {
         if (size >= list_size[i])
             break;
-    }
-	WRLOCK(&list_rwlock[i]);
-    list_insert(bp, i);
-	UNLOCK(&list_rwlock[i]);
+    }*/
+	WRLOCK(&list_rwlock[i]); //mutex lock superblocks list perhaps?
+    //int sblock = superblock_lookup(pthread_self());
+    list_insert(bp);
+	UNLOCK(&list_rwlock[i]); //mutex unlock...
 }
 
 /**********************************************************
@@ -307,30 +309,34 @@ int mm_init(void) {
  * Centralized coalesce, scan throught the entire heap to coalesce all free blocks
  * Will acquire a global write lock, so it will block and be blocked by any other threads
  **********************************************************/
-void coalesce() {
-	block* start = dseg_lo + 5*WSIZE + LIST_CNT * EMPTY_BLOCKSIZE;
-	WRLOCK(&heap_rw_lock);
-	DEBUG("[%x] Enter coalesce\n", pthread_self());
-	for (block* bp = start;  (void*)bp < dseg_hi - WSIZE; bp = NEXT_BLKP(bp)) {
-		if (!GET_ALLOC(bp) && !GET_ALLOC(NEXT_BLKP(bp))) {
-			DEBUG("[%x] Coalesce %d", pthread_self(), (int)((void*)bp - heap_starts));
-			list_remove(bp);
-			do {
-				block* nbp = NEXT_BLKP(bp);
-				DEBUG(", %d", (int)((void*)nbp - heap_starts));
-				list_remove(nbp);
-				DEBUG("[%x] PUT(%p, 0x%x)\n", pthread_self(), &bp->size, bp->size + NEXT_BLKP(bp) -> size);
-				bp -> size += NEXT_BLKP(bp) -> size;
-				SET_FOOTER(bp);
-			} while (!GET_ALLOC(NEXT_BLKP(bp)));
-			DEBUG("\n", 0);
-			list_insert(bp, find_list(bp->size));
-		}
-	}
-	UNLOCK(&heap_rw_lock);
-#ifdef RUN_MM_CHECK
-	mm_check();
-#endif
+void *coalesce(block *bp) {
+    //global lock
+    int prev_alloc = GET_ALLOC(PREV_BLKP(bp));
+    int next_alloc = GET_ALLOC(NEXT_BLKP(bp));
+    size_t size = GET_SIZE(bp);
+    if (prev_alloc && next_alloc) {       /* Case 1 */
+        return bp;
+    } else if (prev_alloc && !next_alloc) { /* Case 2 */
+        size += GET_SIZE(NEXT_BLKP(bp));
+        list_remove(bp);
+        list_remove((NEXT_BLKP(bp)));
+    } else if (!prev_alloc && next_alloc) { /* Case 3 */
+        size += GET_SIZE(PREV_BLKP(bp));
+        list_remove(bp);
+        list_remove(PREV_BLKP(bp));
+        bp = PREV_BLKP(bp);
+    } else {            /* Case 4 */
+        size += GET_SIZE(PREV_BLKP(bp)) +
+                GET_SIZE(NEXT_BLKP(bp));
+        list_remove(bp);
+        list_remove(PREV_BLKP(bp));
+        list_remove(NEXT_BLKP(bp));
+        bp = PREV_BLKP(bp);
+    }
+    relocate_free_segment(bp, size, LIST_CNT - 1); // Set up block for the new coalesced free segment
+    //global lock
+    return bp;
+}
 }
 
 /**********************************************************
