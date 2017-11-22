@@ -272,7 +272,7 @@ int find_list(size_t asize) {
  * search_from is used to accelerate the search if some extra
  * information is known.
  **********************************************************/
-void relocate_free_segment(block* bp, size_t size, int search_from) {
+void relocate_free_segment(block* bp, size_t size) {
     int i;
 	DEBUG("[%x] PUT(%p, 0x%x)\n", pthread_self(), &bp->size, size);
     bp->size = size;
@@ -333,7 +333,7 @@ void *coalesce(block *bp) {
         list_remove(NEXT_BLKP(bp));
         bp = PREV_BLKP(bp);
     }
-    relocate_free_segment(bp, size, LIST_CNT - 1); // Set up block for the new coalesced free segment
+    relocate_free_segment(bp, size); // Set up block for the new coalesced free segment
     //global lock
     return bp;
 }
@@ -422,7 +422,7 @@ ablock* place(block* bp, int asize, int free_size, int list_no, int des_directio
         SET_FOOTER(bp);
         if (free_size > asize) {
             block* rem = NEXT_BLKP(bp);
-            relocate_free_segment(rem, free_size - asize, list_no);
+            relocate_free_segment(rem, free_size - asize);
         }
     }
     else { // Split the block from the upper address
@@ -432,7 +432,7 @@ ablock* place(block* bp, int asize, int free_size, int list_no, int des_directio
 	    DEBUG("[%x] PUT(%p, 0x%x)\n", pthread_self(), &bp->size, PACK(asize, 1));
         bp -> size = PACK(asize, 1);
         if (free_size > asize)
-            relocate_free_segment(rem, free_size - asize, list_no);
+            relocate_free_segment(rem, free_size - asize);
     }
     rec_direction ^= 1; // Direction changes next time
     return (ablock*)bp;
@@ -455,10 +455,9 @@ void* mm_free_thread(void* ptr) {
 	bp->next = NULL;
 	bp->prev = NULL;
 
-	int list_no = find_list(bp->size);
-	WRLOCK(&list_rwlock[list_no]);
+	WRLOCK(&list_rwlock[list_no]); //superblock lock
 	list_insert(bp, list_no);
-	UNLOCK(&list_rwlock[list_no]);
+	UNLOCK(&list_rwlock[list_no]); //super block unlock
 	DEBUG("[%x] %d success\n", pthread_self(), (int)(ptr - heap_starts));
 	UNLOCK(&heap_rw_lock);
 #ifdef RUN_MM_CHECK
