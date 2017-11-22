@@ -169,6 +169,29 @@ int superblock_lookup(int pthread_id) {
 	return -1;
 }
 
+
+/**********************************************************
+ * extend_heap
+ * Extend the heap by "words" words, maintaining alignment
+ * requirements of course.
+ **********************************************************/
+void* extend_heap(size_t words) {
+    void *ptr;
+    size_t size;
+    static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+    /* Allocate an even number of words to maintain alignments */
+    size = (words % 2) ? (words + 1) * WSIZE : words * WSIZE;
+    pthread_mutex_lock(&mutex);
+    if ((ptr = mem_sbrk(size)) == (void *) -1) {
+        pthread_mutex_unlock(&mutex);
+        return NULL;
+    }
+    pthread_mutex_unlock(&mutex);
+
+    return ptr;
+}
+
+
 /**********************************************************
  * allocate_superblock
  * Extend the heap and allocate a new superblock on the top of the current heap
@@ -196,18 +219,6 @@ superblock* allocate_superblock() {
 	//Set up the entire data part as a free block
 
 	return sbp;
-}
-
-/**********************************************************
- * pthread_rwlock_promote
- * Promote a rwlock that is already rdlock-ed by the current thread to wrlock
- **********************************************************/
-void pthread_rwlock_promote(pthread_rwlock_t* lock) {
-	static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-	pthread_mutex_lock(&mutex);
-	UNLOCK(lock);
-	WRLOCK(lock);
-	pthread_mutex_unlock(&mutex);
 }
 
 /**********************************************************
@@ -251,21 +262,6 @@ void list_remove(block* bp) {
 }
 
 /**********************************************************
- * find_list
- * Find the appropriate list for a block sized asize
- **********************************************************/
-int find_list(size_t asize) {
-    int i;
-    /* List #0 also stores the blocks < list_size[0] */
-    if (asize <= list_size[0])
-        return 0;
-    for (i=LIST_CNT - 1; i>=0; i--)
-        if (asize >= list_size[i])
-            return i;
-    return LIST_CNT - 1;
-}
-
-/**********************************************************
  * relocate_free_segment
  * Build up a free block from a free segment at bp sized size
  * Assume that the size <= list_size[search_from]
@@ -281,10 +277,10 @@ void relocate_free_segment(block* bp, size_t size) {
         if (size >= list_size[i])
             break;
     }*/
-	WRLOCK(&list_rwlock[i]); //mutex lock superblocks list perhaps?
+    pthread_mutex_lock(&SUPERBLOCK_OF(bp)->lock); //mutex lock superblocks list perhaps?
     //int sblock = superblock_lookup(pthread_self());
     list_insert(bp);
-	UNLOCK(&list_rwlock[i]); //mutex unlock...
+    pthread_mutex_lock(&SUPERBLOCK_OF(bp)->lock); //mutex unlock...
 }
 
 /**********************************************************
@@ -336,28 +332,6 @@ void *coalesce(block *bp) {
     relocate_free_segment(bp, size); // Set up block for the new coalesced free segment
     //global lock
     return bp;
-}
-}
-
-/**********************************************************
- * extend_heap
- * Extend the heap by "words" words, maintaining alignment
- * requirements of course.
- **********************************************************/
-void* extend_heap(size_t words) {
-    void *ptr;
-    size_t size;
-	static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-    /* Allocate an even number of words to maintain alignments */
-    size = (words % 2) ? (words + 1) * WSIZE : words * WSIZE;
-	pthread_mutex_lock(&mutex);
-    if ((ptr = mem_sbrk(size)) == (void *) -1) {
-	    pthread_mutex_unlock(&mutex);
-	    return NULL;
-    }
-	pthread_mutex_unlock(&mutex);
-
-    return ptr;
 }
 
 /**********************************************************
@@ -413,7 +387,7 @@ ablock* place(block* bp, int asize, int free_size, int list_no, int des_directio
 		--list_no;
     else {
 		list_remove(bp);
-		UNLOCK(&list_rwlock[list_no]);
+        pthread_mutex_unlock(&SUPERBLOCK_OF(SUPERBLOCK_OF)->lock);
 	}
 
     if (direction == 0) { // Split the block from the lower address
@@ -455,9 +429,10 @@ void* mm_free_thread(void* ptr) {
 	bp->next = NULL;
 	bp->prev = NULL;
 
-	WRLOCK(&list_rwlock[list_no]); //superblock lock
+
+    pthread_mutex_lock(&SUPERBLOCK_OF(SUPERBLOCK_OF)->lock);
 	list_insert(bp, list_no);
-	UNLOCK(&list_rwlock[list_no]); //super block unlock
+    pthread_mutex_unlock(&SUPERBLOCK_OF(SUPERBLOCK_OF)->lock);
 	DEBUG("[%x] %d success\n", pthread_self(), (int)(ptr - heap_starts));
 	UNLOCK(&heap_rw_lock);
 #ifdef RUN_MM_CHECK
@@ -506,7 +481,7 @@ void* mm_malloc_thread(int asize) {
 
 	for (n_list_no = list_no; n_list_no < LIST_CNT; ++n_list_no) {
 		/* Search the free list for a fit */
-		WRLOCK(&list_rwlock[n_list_no]);
+        pthread_mutex_lock(&SUPERBLOCK_OF(SUPERBLOCK_OF)->lock);
 		if ((bp = find_fit(asize, list_heads[n_list_no])) != NULL) {
 //			pthread_rwlock_promote(&list_rwlock[n_list_no]);
 			void *ret = place(bp, asize, GET_SIZE(bp), n_list_no, -1)->data;
@@ -517,7 +492,7 @@ void* mm_malloc_thread(int asize) {
 #endif
 			return ret;
 		}
-		UNLOCK(&list_rwlock[n_list_no]);
+        pthread_mutex_unlock(SUPERBLOCK_OF(SUPERBLOCK_OF)->lock);
 	}
 	/* No fit found. Get more memory and place the block */
 	// Adjust the chunk size adaptively
