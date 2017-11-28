@@ -23,6 +23,7 @@ typedef struct thread_args{
     int ncols;
     int ncolsmax;
     int gens_max;
+    int thread;
 } arguments;
 
 #define SWAP_BOARDS( b1, b2 )  do { \
@@ -48,22 +49,24 @@ void thread_board(char* outboard,
                   const int gens_max){
     int i, j;
     int LDA = nrowsmax;
+    int inorth, isouth, jwest, jeast;
+    char neighbor_count;
 
     for (i = srows; i < nrows; i++) {
+        inorth = mod(i - 1, nrowsmax);
+        isouth = mod(i + 1, nrowsmax);
         for (j = scols; j < ncols; j++) {
-            const int inorth = mod(i - 1, nrowsmax);
-            const int isouth = mod(i + 1, nrowsmax);
-            const int jwest = mod(j - 1, ncolsmax);
-            const int jeast = mod(j + 1, ncolsmax);
+            neighbor_count = BOARD (inboard, inorth, j) +
+                    BOARD (inboard, isouth, j);
+            jwest = mod(j - 1, ncolsmax);
+            jeast = mod(j + 1, ncolsmax);
 
-            const char neighbor_count =
+            neighbor_count +=
                     BOARD (inboard, inorth, jwest) +
-                    BOARD (inboard, inorth, j) +
                     BOARD (inboard, inorth, jeast) +
                     BOARD (inboard, i, jwest) +
                     BOARD (inboard, i, jeast) +
                     BOARD (inboard, isouth, jwest) +
-                    BOARD (inboard, isouth, j) +
                     BOARD (inboard, isouth, jeast);
             BOARD(outboard, i, j) = alivep(neighbor_count, BOARD (inboard, i, j));
         }
@@ -78,13 +81,131 @@ void* thread_handler(void* thread_args){
     arguments* threadArgs = (arguments *) thread_args;
     char* outboard = threadArgs->outboard;
     char* inboard = threadArgs->inboard;
-    const int srows = threadArgs->srows;
-    const int scols = threadArgs->scols;
-    const int nrows = threadArgs->nrows;
+     int srows = threadArgs->srows;
+     int scols = threadArgs->scols;
+     int nrows = threadArgs->nrows;
     const int nrowsmax = threadArgs->nrowsmax;
-    const int ncols = threadArgs->ncols;
+     int ncols = threadArgs->ncols;
     const int ncolsmax = threadArgs->ncolsmax;
     const int gens_max = threadArgs->gens_max;
+
+    switch (threadArgs->thread){
+        case 0:
+            srows = 0;
+            scols = 0;
+            nrows = nrows/4;
+            ncols = ncols/4;
+            break;
+
+        case 1:
+            srows = 0;
+            scols = ncols/4;
+            nrows = nrows/4;
+            ncols = ncols/2;
+            break;
+
+        case 2:
+            srows = 0;
+            scols = ncols/2;
+            nrows = nrows/4;
+            ncols = (3*ncols)/4;
+            break;
+
+        case 3:
+            srows = 0;
+            scols = (3*ncols)/4;
+            nrows = nrows/4;
+            ncols = ncols;
+            break;
+
+        case 4:
+            srows = nrows/4;
+            scols = 0;
+            nrows = nrows/2;
+            ncols = ncols/4;
+            break;
+
+        case 5:
+            srows = nrows/4;
+            scols = ncols/4;
+            nrows = nrows/2;
+            ncols = ncols/2;
+            break;
+
+        case 6:
+            srows = nrows/4;
+            scols = ncols/2;
+            nrows = nrows/2;
+            ncols = (3*ncols)/4;
+            break;
+
+        case 7:
+            srows = nrows/4;
+            scols = (3*ncols)/4;
+            nrows = nrows/2;
+            ncols = ncols;
+            break;
+
+        case 8:
+            srows = nrows/2;
+            scols = 0;
+            nrows = (3*nrows)/4;
+            ncols = ncols/4;
+            break;
+
+        case 9:
+            srows = nrows/2;
+            scols = ncols/4;
+            nrows = (3*nrows)/4;
+            ncols = ncols/2;
+            break;
+
+        case 10:
+            srows = nrows/2;
+            scols = ncols/2;
+            nrows = (3*nrows)/4;
+            ncols = (3*ncols)/4;
+            break;
+
+        case 11:
+            srows = nrows/2;
+            scols = (3*ncols)/4;
+            nrows = (3*nrows)/4;
+            ncols = ncols;
+            break;
+
+        case 12:
+            srows = (3*nrows)/4;
+            scols = 0;
+            nrows = nrows;
+            ncols = ncols/4;
+            break;
+
+        case 13:
+            srows = (3*nrows)/4;
+            scols = ncols/4;
+            nrows = nrows;
+            ncols = ncols/2;
+            break;
+
+        case 14:
+            srows = (3*nrows)/4;
+            scols = ncols/2;
+            nrows = nrows;
+            ncols = (3*ncols)/4;
+            break;
+
+        case 15:
+            srows = (3*nrows)/4;
+            scols = (3*ncols)/4;
+            nrows = nrows;
+            ncols = ncols;
+            break;
+
+        default:
+            return;
+    }
+
     thread_board(outboard,inboard, srows, scols, nrows, nrowsmax, ncols, ncolsmax, gens_max);
 	return;
 }
@@ -113,136 +234,19 @@ char* multi_game_of_life (char* outboard,
         thread_args[i].nrowsmax = nrows;
         thread_args[i].ncolsmax = ncols;
         thread_args[i].gens_max = gens_max;
+        thread_args[i].thread = i;
     }
 
+    pthread_t test_thread[16];
     for (curgen = 0; curgen < gens_max; curgen++) {
-        //printf("Curgen count to watch for deadlock: %d\n", curgen);
-        pthread_t test_thread1;
-        pthread_t test_thread2;
-        pthread_t test_thread3;
-        pthread_t test_thread4;
-        pthread_t test_thread5;
-        pthread_t test_thread6;
-        pthread_t test_thread7;
-        pthread_t test_thread8;
-        pthread_t test_thread9;
-        pthread_t test_thread10;
-        pthread_t test_thread11;
-        pthread_t test_thread12;
-        pthread_t test_thread13;
-        pthread_t test_thread14;
-        pthread_t test_thread15;
-        pthread_t test_thread16;
-
         for(int i = 0; i < 16; i++){
             thread_args[i].inboard = inboard;
             thread_args[i].outboard = outboard;
+            pthread_create(&test_thread[i], NULL, thread_handler, &thread_args[i]);
         }
-
-        //Top Row
-        thread_args[0].srows = 0;
-        thread_args[0].scols = 0;
-        thread_args[0].nrows = nrows/4;
-        thread_args[0].ncols = ncols/4;
-        pthread_create(&test_thread1, NULL, thread_handler, &thread_args[0]);
-        thread_args[1].srows = 0;
-        thread_args[1].scols = ncols/4;
-        thread_args[1].nrows = nrows/4;
-        thread_args[1].ncols = ncols/2;
-        pthread_create(&test_thread2, NULL, thread_handler, &thread_args[1]);
-        thread_args[2].srows = 0;
-        thread_args[2].scols = ncols/2;
-        thread_args[2].nrows = nrows/4;
-        thread_args[2].ncols = (3*ncols)/4;
-        pthread_create(&test_thread3, NULL, thread_handler, &thread_args[2]);
-        thread_args[3].srows = 0;
-        thread_args[3].scols = (3*ncols)/4;
-        thread_args[3].nrows = nrows/4;
-        thread_args[3].ncols = ncols;
-        pthread_create(&test_thread4, NULL, thread_handler, &thread_args[3]);
-
-        //Middle Row 1
-        thread_args[4].srows = nrows/4;
-        thread_args[4].scols = 0;
-        thread_args[4].nrows = nrows/2;
-        thread_args[4].ncols = ncols/4;
-        pthread_create(&test_thread5, NULL, thread_handler, &thread_args[4]);
-        thread_args[5].srows = nrows/4;
-        thread_args[5].scols = ncols/4;
-        thread_args[5].nrows = nrows/2;
-        thread_args[5].ncols = ncols/2;
-        pthread_create(&test_thread6, NULL, thread_handler, &thread_args[5]);
-        thread_args[6].srows = nrows/4;
-        thread_args[6].scols = ncols/2;
-        thread_args[6].nrows = nrows/2;
-        thread_args[6].ncols = (3*ncols)/4;
-        pthread_create(&test_thread7, NULL, thread_handler, &thread_args[6]);
-        thread_args[7].srows = nrows/4;
-        thread_args[7].scols = (3*ncols)/4;
-        thread_args[7].nrows = nrows/2;
-        thread_args[7].ncols = ncols;
-        pthread_create(&test_thread8, NULL, thread_handler, &thread_args[7]);
-
-        //Middle Row 2
-        thread_args[8].srows = nrows/2;
-        thread_args[8].scols = 0;
-        thread_args[8].nrows = (3*nrows)/4;
-        thread_args[8].ncols = ncols/4;
-        pthread_create(&test_thread9, NULL, thread_handler, &thread_args[8]);
-        thread_args[9].srows = nrows/2;
-        thread_args[9].scols = ncols/4;
-        thread_args[9].nrows = (3*nrows)/4;
-        thread_args[9].ncols = ncols/2;
-        pthread_create(&test_thread10, NULL, thread_handler, &thread_args[9]);
-        thread_args[10].srows = nrows/2;
-        thread_args[10].scols = ncols/2;
-        thread_args[10].nrows = (3*nrows)/4;
-        thread_args[10].ncols = (3*ncols)/4;
-        pthread_create(&test_thread11, NULL, thread_handler, &thread_args[10]);
-        thread_args[11].srows = nrows/2;
-        thread_args[11].scols = (3*ncols)/4;
-        thread_args[11].nrows = (3*nrows)/4;
-        thread_args[11].ncols = ncols;
-        pthread_create(&test_thread12, NULL, thread_handler, &thread_args[11]);
-
-        //Bottom Row
-        thread_args[12].srows = (3*nrows)/4;
-        thread_args[12].scols = 0;
-        thread_args[12].nrows = nrows;
-        thread_args[12].ncols = ncols/4;
-        pthread_create(&test_thread13, NULL, thread_handler, &thread_args[12]);
-        thread_args[13].srows = (3*nrows)/4;
-        thread_args[13].scols = ncols/4;
-        thread_args[13].nrows = nrows;
-        thread_args[13].ncols = ncols/2;
-        pthread_create(&test_thread14, NULL, thread_handler, &thread_args[13]);
-        thread_args[14].srows = (3*nrows)/4;
-        thread_args[14].scols = ncols/2;
-        thread_args[14].nrows = nrows;
-        thread_args[14].ncols = (3*ncols)/4;
-        pthread_create(&test_thread15, NULL, thread_handler, &thread_args[14]);
-        thread_args[15].srows = (3*nrows)/4;
-        thread_args[15].scols = (3*ncols)/4;
-        thread_args[15].nrows = nrows;
-        thread_args[15].ncols = ncols;
-        pthread_create(&test_thread16, NULL, thread_handler, &thread_args[15]);
-
-        pthread_join(test_thread1, NULL);
-        pthread_join(test_thread2, NULL);
-        pthread_join(test_thread3, NULL);
-        pthread_join(test_thread4, NULL);
-        pthread_join(test_thread5, NULL);
-        pthread_join(test_thread6, NULL);
-        pthread_join(test_thread7, NULL);
-        pthread_join(test_thread8, NULL);
-        pthread_join(test_thread9, NULL);
-        pthread_join(test_thread10, NULL);
-        pthread_join(test_thread11, NULL);
-        pthread_join(test_thread12, NULL);
-        pthread_join(test_thread13, NULL);
-        pthread_join(test_thread14, NULL);
-        pthread_join(test_thread15, NULL);
-        pthread_join(test_thread16, NULL);
+        for(int j = 0; j < 16; j++){
+            pthread_join(test_thread[j], NULL);
+        }
         SWAP_BOARDS(outboard, inboard);
     }
 	/*
