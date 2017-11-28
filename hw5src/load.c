@@ -45,7 +45,7 @@ load_dimensions (FILE* input, int* nrows, int* ncols)
 }
 
 static char*
-load_board_values (FILE* input, const int nrows, const int ncols)
+load_board_values (FILE* input, const int nrows, const int ncols) //can parallelize for loop?
 {
   char* board = NULL;
   int ngotten = 0;
