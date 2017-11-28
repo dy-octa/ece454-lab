@@ -1,0 +1,7 @@
+teamName: Cheesecake
+student1_fullName: Andrei Patranoiu
+student1_studentNumber: 998130696
+student1_email: andrei.patranoiu@mail.utoronto.ca
+student2_fullName: He Mutian
+student2_studentNumber: 1004654475
+student2_email: mutian.he@mail.utoronto.ca

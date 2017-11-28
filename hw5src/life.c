@@ -133,8 +133,8 @@ char* multi_game_of_life (char* outboard,
 	/* HINT: in the parallel decomposition, LDA may not be equal to
        nrows! */
 	int curgen;
-    arguments thread_args[2];
-    for(int i = 0; i < 2; i++){
+    arguments thread_args[4];
+    for(int i = 0; i < 4; i++){
         thread_args[i].inboard = inboard;
         thread_args[i].outboard = outboard;
         thread_args[i].srows = 0;
@@ -147,7 +147,7 @@ char* multi_game_of_life (char* outboard,
     }
 
     for (curgen = 0; curgen < gens_max; curgen++) {
-        printf("Curgen count to watch for deadlock: %d\n", curgen);
+        //printf("Curgen count to watch for deadlock: %d\n", curgen);
         //printf("inboard and outboard addresses: %p, %p\n", inboard, outboard);
 
         /*
@@ -155,22 +155,49 @@ char* multi_game_of_life (char* outboard,
          */
         pthread_t test_thread1;
         pthread_t test_thread2;
+        pthread_t test_thread3;
+        pthread_t test_thread4;
 
-        for(int i = 0; i < 2; i++){
+        for(int i = 0; i < 4; i++){
             thread_args[i].inboard = inboard;
             thread_args[i].outboard = outboard;
         }
 
+        //Top Row
+
+        //Middle Row 1
+
+        //Middle Row 2
+
+        //Bottom Row
         thread_args[0].srows = 0;
+        thread_args[0].scols = 0;
         thread_args[0].nrows = nrows/2;
+        thread_args[0].ncols = ncols/2;
         pthread_create(&test_thread1, NULL, thread_handler, &thread_args[0]);
 
         thread_args[1].srows = nrows/2;
+        thread_args[1].scols = 0;
         thread_args[1].nrows = nrows;
+        thread_args[1].ncols = ncols/2;
         pthread_create(&test_thread2, NULL, thread_handler, &thread_args[1]);
+
+        thread_args[2].srows = 0;
+        thread_args[2].scols = ncols/2;
+        thread_args[2].nrows = nrows/2;
+        thread_args[2].ncols = ncols;
+        pthread_create(&test_thread3, NULL, thread_handler, &thread_args[2]);
+
+        thread_args[3].srows = nrows/2;
+        thread_args[3].scols = ncols/2;
+        thread_args[3].nrows = nrows;
+        thread_args[3].ncols = ncols;
+        pthread_create(&test_thread4, NULL, thread_handler, &thread_args[3]);
 
         pthread_join(test_thread1, NULL);
         pthread_join(test_thread2, NULL);
+        pthread_join(test_thread3, NULL);
+        pthread_join(test_thread4, NULL);
         SWAP_BOARDS(outboard, inboard);
 
 
