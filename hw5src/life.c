@@ -46,9 +46,6 @@ void thread_board(char* outboard,
                   const int ncols,
                   const int ncolsmax,
                   const int gens_max){
-
-    //printf("thread address of boards: %p, %p\n", inboard, outboard);
-    //printf("Called thread_board\n");
     int i, j;
     int LDA = nrowsmax;
 
@@ -68,37 +65,9 @@ void thread_board(char* outboard,
                     BOARD (inboard, isouth, jwest) +
                     BOARD (inboard, isouth, j) +
                     BOARD (inboard, isouth, jeast);
-            //pthread_mutex_lock(&mutex);
             BOARD(outboard, i, j) = alivep(neighbor_count, BOARD (inboard, i, j));
-            //pthread_mutex_unlock(&mutex);
         }
     }
-
-    //SWAP_BOARDS(outboard, inboard);
-
-    /*for (i = nrows/2; i < nrows; i++) {
-        for (j = scols; j < ncols; j++) {
-            const int inorth = mod(i - 1, nrows);
-            const int isouth = mod(i + 1, nrows);
-            const int jwest = mod(j - 1, ncols);
-            const int jeast = mod(j + 1, ncols);
-
-            const char neighbor_count =
-                    BOARD (inboard, inorth, jwest) +
-                    BOARD (inboard, inorth, j) +
-                    BOARD (inboard, inorth, jeast) +
-                    BOARD (inboard, i, jwest) +
-                    BOARD (inboard, i, jeast) +
-                    BOARD (inboard, isouth, jwest) +
-                    BOARD (inboard, isouth, j) +
-                    BOARD (inboard, isouth, jeast);
-
-            BOARD(outboard, i, j) = alivep(neighbor_count, BOARD (inboard, i, j));
-        }
-    }*/
-
-
-    //printf("returning from thread_board\n");
     return;
 }
 
@@ -148,11 +117,6 @@ char* multi_game_of_life (char* outboard,
 
     for (curgen = 0; curgen < gens_max; curgen++) {
         //printf("Curgen count to watch for deadlock: %d\n", curgen);
-        //printf("inboard and outboard addresses: %p, %p\n", inboard, outboard);
-
-        /*
-         * MultiThreaded
-         */
         pthread_t test_thread1;
         pthread_t test_thread2;
         pthread_t test_thread3;
@@ -280,20 +244,6 @@ char* multi_game_of_life (char* outboard,
         pthread_join(test_thread15, NULL);
         pthread_join(test_thread16, NULL);
         SWAP_BOARDS(outboard, inboard);
-
-
-        /*
-         * Sequential
-         */
-        /*thread_args.inboard = inboard;
-        thread_args.outboard = outboard;
-        thread_args.srows = 0;
-        thread_args.nrows = nrows/2;
-        thread_handler(&thread_args);
-        thread_args.srows = nrows/2;
-        thread_args.nrows = nrows;
-        thread_handler(&thread_args);
-        SWAP_BOARDS(outboard, inboard);*/
     }
 	/*
      * We return the output board, so that we know which one contains
