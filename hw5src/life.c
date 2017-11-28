@@ -133,8 +133,8 @@ char* multi_game_of_life (char* outboard,
 	/* HINT: in the parallel decomposition, LDA may not be equal to
        nrows! */
 	int curgen;
-    arguments thread_args[4];
-    for(int i = 0; i < 4; i++){
+    arguments thread_args[16];
+    for(int i = 0; i < 16; i++){
         thread_args[i].inboard = inboard;
         thread_args[i].outboard = outboard;
         thread_args[i].srows = 0;
@@ -157,47 +157,128 @@ char* multi_game_of_life (char* outboard,
         pthread_t test_thread2;
         pthread_t test_thread3;
         pthread_t test_thread4;
+        pthread_t test_thread5;
+        pthread_t test_thread6;
+        pthread_t test_thread7;
+        pthread_t test_thread8;
+        pthread_t test_thread9;
+        pthread_t test_thread10;
+        pthread_t test_thread11;
+        pthread_t test_thread12;
+        pthread_t test_thread13;
+        pthread_t test_thread14;
+        pthread_t test_thread15;
+        pthread_t test_thread16;
 
-        for(int i = 0; i < 4; i++){
+        for(int i = 0; i < 16; i++){
             thread_args[i].inboard = inboard;
             thread_args[i].outboard = outboard;
         }
 
         //Top Row
-
-        //Middle Row 1
-
-        //Middle Row 2
-
-        //Bottom Row
         thread_args[0].srows = 0;
         thread_args[0].scols = 0;
-        thread_args[0].nrows = nrows/2;
-        thread_args[0].ncols = ncols/2;
+        thread_args[0].nrows = nrows/4;
+        thread_args[0].ncols = ncols/4;
         pthread_create(&test_thread1, NULL, thread_handler, &thread_args[0]);
-
-        thread_args[1].srows = nrows/2;
-        thread_args[1].scols = 0;
-        thread_args[1].nrows = nrows;
+        thread_args[1].srows = 0;
+        thread_args[1].scols = ncols/4;
+        thread_args[1].nrows = nrows/4;
         thread_args[1].ncols = ncols/2;
         pthread_create(&test_thread2, NULL, thread_handler, &thread_args[1]);
-
         thread_args[2].srows = 0;
         thread_args[2].scols = ncols/2;
-        thread_args[2].nrows = nrows/2;
-        thread_args[2].ncols = ncols;
+        thread_args[2].nrows = nrows/4;
+        thread_args[2].ncols = (3*ncols)/4;
         pthread_create(&test_thread3, NULL, thread_handler, &thread_args[2]);
-
-        thread_args[3].srows = nrows/2;
-        thread_args[3].scols = ncols/2;
-        thread_args[3].nrows = nrows;
+        thread_args[3].srows = 0;
+        thread_args[3].scols = (3*ncols)/4;
+        thread_args[3].nrows = nrows/4;
         thread_args[3].ncols = ncols;
         pthread_create(&test_thread4, NULL, thread_handler, &thread_args[3]);
+
+        //Middle Row 1
+        thread_args[4].srows = nrows/4;
+        thread_args[4].scols = 0;
+        thread_args[4].nrows = nrows/2;
+        thread_args[4].ncols = ncols/4;
+        pthread_create(&test_thread5, NULL, thread_handler, &thread_args[4]);
+        thread_args[5].srows = nrows/4;
+        thread_args[5].scols = ncols/4;
+        thread_args[5].nrows = nrows/2;
+        thread_args[5].ncols = ncols/2;
+        pthread_create(&test_thread6, NULL, thread_handler, &thread_args[5]);
+        thread_args[6].srows = nrows/4;
+        thread_args[6].scols = ncols/2;
+        thread_args[6].nrows = nrows/2;
+        thread_args[6].ncols = (3*ncols)/4;
+        pthread_create(&test_thread7, NULL, thread_handler, &thread_args[6]);
+        thread_args[7].srows = nrows/4;
+        thread_args[7].scols = (3*ncols)/4;
+        thread_args[7].nrows = nrows/2;
+        thread_args[7].ncols = ncols;
+        pthread_create(&test_thread8, NULL, thread_handler, &thread_args[7]);
+
+        //Middle Row 2
+        thread_args[8].srows = nrows/2;
+        thread_args[8].scols = 0;
+        thread_args[8].nrows = (3*nrows)/4;
+        thread_args[8].ncols = ncols/4;
+        pthread_create(&test_thread9, NULL, thread_handler, &thread_args[8]);
+        thread_args[9].srows = nrows/2;
+        thread_args[9].scols = ncols/4;
+        thread_args[9].nrows = (3*nrows)/4;
+        thread_args[9].ncols = ncols/2;
+        pthread_create(&test_thread10, NULL, thread_handler, &thread_args[9]);
+        thread_args[10].srows = nrows/2;
+        thread_args[10].scols = ncols/2;
+        thread_args[10].nrows = (3*nrows)/4;
+        thread_args[10].ncols = (3*ncols)/4;
+        pthread_create(&test_thread11, NULL, thread_handler, &thread_args[10]);
+        thread_args[11].srows = nrows/2;
+        thread_args[11].scols = (3*ncols)/4;
+        thread_args[11].nrows = (3*nrows)/4;
+        thread_args[11].ncols = ncols;
+        pthread_create(&test_thread12, NULL, thread_handler, &thread_args[11]);
+
+        //Bottom Row
+        thread_args[12].srows = (3*nrows)/4;
+        thread_args[12].scols = 0;
+        thread_args[12].nrows = nrows;
+        thread_args[12].ncols = ncols/4;
+        pthread_create(&test_thread13, NULL, thread_handler, &thread_args[12]);
+        thread_args[13].srows = (3*nrows)/4;
+        thread_args[13].scols = ncols/4;
+        thread_args[13].nrows = nrows;
+        thread_args[13].ncols = ncols/2;
+        pthread_create(&test_thread14, NULL, thread_handler, &thread_args[13]);
+        thread_args[14].srows = (3*nrows)/4;
+        thread_args[14].scols = ncols/2;
+        thread_args[14].nrows = nrows;
+        thread_args[14].ncols = (3*ncols)/4;
+        pthread_create(&test_thread15, NULL, thread_handler, &thread_args[14]);
+        thread_args[15].srows = (3*nrows)/4;
+        thread_args[15].scols = (3*ncols)/4;
+        thread_args[15].nrows = nrows;
+        thread_args[15].ncols = ncols;
+        pthread_create(&test_thread16, NULL, thread_handler, &thread_args[15]);
 
         pthread_join(test_thread1, NULL);
         pthread_join(test_thread2, NULL);
         pthread_join(test_thread3, NULL);
         pthread_join(test_thread4, NULL);
+        pthread_join(test_thread5, NULL);
+        pthread_join(test_thread6, NULL);
+        pthread_join(test_thread7, NULL);
+        pthread_join(test_thread8, NULL);
+        pthread_join(test_thread9, NULL);
+        pthread_join(test_thread10, NULL);
+        pthread_join(test_thread11, NULL);
+        pthread_join(test_thread12, NULL);
+        pthread_join(test_thread13, NULL);
+        pthread_join(test_thread14, NULL);
+        pthread_join(test_thread15, NULL);
+        pthread_join(test_thread16, NULL);
         SWAP_BOARDS(outboard, inboard);
 
 
