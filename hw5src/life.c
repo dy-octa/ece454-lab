@@ -79,37 +79,36 @@ void thread_board(char* outboard,
                         jwest4 = mod((j1 + 3) - 1, ncolsmax);
                         jeast4 = mod((j1 + 3) + 1, ncolsmax);
 
-                        neighbor_count = BOARD (inboard, inorth, j1) +
-                                         BOARD (inboard, isouth, j1);
-                        neighbor_count2 = BOARD (inboard, inorth, (j1 + 1)) +
-                                          BOARD (inboard, isouth, (j1 + 1));
-                        neighbor_count3 = BOARD (inboard, inorth, (j1 + 2)) +
-                                          BOARD (inboard, isouth, (j1 + 2));
-                        neighbor_count4 = BOARD (inboard, inorth, (j1 + 3)) +
-                                          BOARD (inboard, isouth, (j1 + 3));
-
-                        neighbor_count +=
+                        neighbor_count =
+                                BOARD (inboard, inorth, j1) +
+                                BOARD (inboard, isouth, j1) +
                                 BOARD (inboard, inorth, jwest) +
                                 BOARD (inboard, inorth, jeast) +
                                 BOARD (inboard, i1, jwest) +
                                 BOARD (inboard, i1, jeast) +
                                 BOARD (inboard, isouth, jwest) +
                                 BOARD (inboard, isouth, jeast);
-                        neighbor_count2 +=
+                        neighbor_count2 =
+                                BOARD (inboard, inorth, (j1 + 1)) +
+                                BOARD (inboard, isouth, (j1 + 1)) +
                                 BOARD (inboard, inorth, jwest2) +
                                 BOARD (inboard, inorth, jeast2) +
                                 BOARD (inboard, i1, jwest2) +
                                 BOARD (inboard, i1, jeast2) +
                                 BOARD (inboard, isouth, jwest2) +
                                 BOARD (inboard, isouth, jeast2);
-                        neighbor_count3 +=
+                        neighbor_count3 =
+                                BOARD (inboard, inorth, (j1 + 2)) +
+                                BOARD (inboard, isouth, (j1 + 2)) +
                                 BOARD (inboard, inorth, jwest3) +
                                 BOARD (inboard, inorth, jeast3) +
                                 BOARD (inboard, i1, jwest3) +
                                 BOARD (inboard, i1, jeast3) +
                                 BOARD (inboard, isouth, jwest3) +
                                 BOARD (inboard, isouth, jeast3);
-                        neighbor_count4 +=
+                        neighbor_count4 =
+                                BOARD (inboard, inorth, (j1 + 3)) +
+                                BOARD (inboard, isouth, (j1 + 3)) +
                                 BOARD (inboard, inorth, jwest4) +
                                 BOARD (inboard, inorth, jeast4) +
                                 BOARD (inboard, i1, jwest4) +
@@ -163,7 +162,7 @@ void* thread_handler(void* thread_args){
     int* done = threadArgs->done;
 
     thread_board(outboard,inboard, srows, scols, nrows, nrowsmax, ncols, ncolsmax, gens_max, mutex, cond, done);
-	return;
+	return NULL;
 }
 
 /*****************************************************************************
@@ -295,7 +294,7 @@ char* multi_game_of_life (char* outboard,
                 thread_args[i].ncols = ncols;
                 break;
             default:
-                return;
+                break;
         }
     }
 
