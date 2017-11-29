@@ -16,14 +16,9 @@ pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 typedef struct thread_args{
     char* outboard;
     char* inboard;
-    int srows;
-    int scols;
-    int nrows;
-    int nrowsmax;
-    int ncols;
-    int ncolsmax;
-    int gens_max;
     int thread;
+    int nrows;
+    int ncols;
 } arguments;
 
 #define SWAP_BOARDS( b1, b2 )  do { \
@@ -45,30 +40,50 @@ void thread_board(char* outboard,
                   const int nrows,
                   const int nrowsmax,
                   const int ncols,
-                  const int ncolsmax,
-                  const int gens_max){
-    int i, j;
+                  const int ncolsmax){
+    int i, j, i1, j1;
     int LDA = nrowsmax;
-    int inorth, isouth, jwest, jeast;
-    char neighbor_count;
+    int inorth, isouth, jwest, jeast, inorth2, isouth2, jwest2, jeast2;
+    char neighbor_count, neighbor_count2;
 
-    for (i = srows; i < nrows; i++) {
-        inorth = mod(i - 1, nrowsmax);
-        isouth = mod(i + 1, nrowsmax);
-        for (j = scols; j < ncols; j++) {
-            neighbor_count = BOARD (inboard, inorth, j) +
-                    BOARD (inboard, isouth, j);
-            jwest = mod(j - 1, ncolsmax);
-            jeast = mod(j + 1, ncolsmax);
+    for (i = srows; i < nrows; i+=32) {
+        for (j = scols; j < ncols; j+=64) {
+            //128bit rows * 512bit columns tiles
+            for(i1 = i; i1 < i + 32; i1++){
+                inorth = mod(i1 - 1, nrowsmax);
+                isouth = mod(i1 + 1, nrowsmax);
+                inorth2 = mod((i1) - 1, nrowsmax);
+                isouth2 = mod((i1) + 1, nrowsmax);
+                for(j1 = j; j1 < ((j + 64) - 1); j1+=2){
+                    neighbor_count = BOARD (inboard, inorth, j1) +
+                                     BOARD (inboard, isouth, j1);
+                    neighbor_count2 = BOARD (inboard, inorth2, (j1+1)) +
+                                     BOARD (inboard, isouth2, (j1+1));
 
-            neighbor_count +=
-                    BOARD (inboard, inorth, jwest) +
-                    BOARD (inboard, inorth, jeast) +
-                    BOARD (inboard, i, jwest) +
-                    BOARD (inboard, i, jeast) +
-                    BOARD (inboard, isouth, jwest) +
-                    BOARD (inboard, isouth, jeast);
-            BOARD(outboard, i, j) = alivep(neighbor_count, BOARD (inboard, i, j));
+                    jwest = mod(j1 - 1, ncolsmax);
+                    jeast = mod(j1 + 1, ncolsmax);
+                    jwest2 = mod((j1+1) - 1, ncolsmax);
+                    jeast2 = mod((j1+1) + 1, ncolsmax);
+
+                    neighbor_count +=
+                            BOARD (inboard, inorth, jwest) +
+                            BOARD (inboard, inorth, jeast) +
+                            BOARD (inboard, i1, jwest) +
+                            BOARD (inboard, i1, jeast) +
+                            BOARD (inboard, isouth, jwest) +
+                            BOARD (inboard, isouth, jeast);
+                    neighbor_count2 +=
+                            BOARD (inboard, inorth, jwest2) +
+                            BOARD (inboard, inorth, jeast2) +
+                            BOARD (inboard, i1, jwest2) +
+                            BOARD (inboard, i1, jeast2) +
+                            BOARD (inboard, isouth, jwest2) +
+                            BOARD (inboard, isouth, jeast2);
+
+                    BOARD(outboard, i1, j1) = alivep(neighbor_count, BOARD (inboard, i1, j1));
+                    BOARD(outboard, i1, (j1+1)) = alivep(neighbor_count2, BOARD (inboard, i1, (j1+1)));
+                }
+            }
         }
     }
     return;
@@ -78,16 +93,16 @@ void thread_board(char* outboard,
  * Thread entry function
  ****************************************************************************/
 void* thread_handler(void* thread_args){
+    int srows;
+    int scols;
+
     arguments* threadArgs = (arguments *) thread_args;
     char* outboard = threadArgs->outboard;
     char* inboard = threadArgs->inboard;
-     int srows = threadArgs->srows;
-     int scols = threadArgs->scols;
-     int nrows = threadArgs->nrows;
-    const int nrowsmax = threadArgs->nrowsmax;
-     int ncols = threadArgs->ncols;
-    const int ncolsmax = threadArgs->ncolsmax;
-    const int gens_max = threadArgs->gens_max;
+    int nrows = threadArgs->nrows;
+    const int nrowsmax = threadArgs->nrows;
+    int ncols = threadArgs->ncols;
+    const int ncolsmax = threadArgs->ncols;
 
     switch (threadArgs->thread){
         case 0:
@@ -206,7 +221,7 @@ void* thread_handler(void* thread_args){
             return;
     }
 
-    thread_board(outboard,inboard, srows, scols, nrows, nrowsmax, ncols, ncolsmax, gens_max);
+    thread_board(outboard,inboard, srows, scols, nrows, nrowsmax, ncols, ncolsmax);
 	return;
 }
 
@@ -225,23 +240,16 @@ char* multi_game_of_life (char* outboard,
 	int curgen;
     arguments thread_args[16];
     for(int i = 0; i < 16; i++){
-        thread_args[i].inboard = inboard;
-        thread_args[i].outboard = outboard;
-        thread_args[i].srows = 0;
-        thread_args[i].scols = 0;
-        thread_args[i].ncols = ncols;
         thread_args[i].nrows = nrows;
-        thread_args[i].nrowsmax = nrows;
-        thread_args[i].ncolsmax = ncols;
-        thread_args[i].gens_max = gens_max;
+        thread_args[i].ncols = ncols;
         thread_args[i].thread = i;
     }
 
     pthread_t test_thread[16];
     for (curgen = 0; curgen < gens_max; curgen++) {
         for(int i = 0; i < 16; i++){
-            thread_args[i].inboard = inboard;
             thread_args[i].outboard = outboard;
+            thread_args[i].inboard = inboard;
             pthread_create(&test_thread[i], NULL, thread_handler, &thread_args[i]);
         }
         for(int j = 0; j < 16; j++){
