@@ -58,7 +58,8 @@ void thread_board(char* outboard,
     int jwest3, jeast3, jwest4, jeast4;
     char neighbor_count, neighbor_count2;
     char neighbor_count3, neighbor_count4;
-
+    int test1 = 0;
+    int test2;
     //printf("genmax is what: %d\n", gens_max);
 
     for (curgen = 0; curgen < gens_max; curgen++) {
@@ -115,6 +116,8 @@ void thread_board(char* outboard,
                                 BOARD (inboard, i1, jeast4) +
                                 BOARD (inboard, isouth, jwest4) +
                                 BOARD (inboard, isouth, jeast4);
+
+
 
                         BOARD(outboard, i1, j1) = alivep(neighbor_count, BOARD (inboard, i1, j1));
                         BOARD(outboard, i1, (j1 + 1)) = alivep(neighbor_count2, BOARD (inboard, i1, (j1 + 1)));
