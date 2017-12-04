@@ -53,12 +53,22 @@ load_board_values (FILE* input, const int nrows, const int ncols) //can parallel
 
   /* Make a new board */
   board = make_board (nrows, ncols);
-	fread(board, sizeof(char), 2 * nrows * ncols, input);
 
   /* Fill in the board with values from the input file */
 
   for (i = 0; i < nrows * ncols; i++)
-	  board[i] = board[i*2] - '0';
+    {
+      ngotten = fscanf (input, "%c\n", &board[i]);
+      if (ngotten < 1)
+	{
+	  fprintf (stderr, "*** Ran out of input at item %d ***\n", i);
+	  fclose (input);
+	  exit (EXIT_FAILURE);
+	}
+      else
+	/* ASCII '0' is not zero; do the conversion */
+	board[i] = board[i] - '0';
+    }
 
   return board;
 }
