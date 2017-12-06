@@ -1044,7 +1044,11 @@ char *multi_game_of_life(char *outboard,
                          const int gens_max) {
 
 
-	if(nrows == 1024 && ncols == 1024){
+    if((nrows > 10000 || ncols > 10000) ) {
+        printf("ERROR: Invalid board size.\n");
+        exit(1);
+    }
+    else if(nrows == 1024 && ncols == 1024){
 		int thread_done = 0;
 		int numProcs = sysconf (_SC_NPROCESSORS_ONLN);
 		//printf("number of processors: %d\n", numProcs);
@@ -1291,10 +1295,9 @@ char *multi_game_of_life(char *outboard,
 
 		return inboard;
 	}
-	else if((nrows < 32 || ncols < 32) || (nrows > 10000 || ncols > 10000) ) {
-		printf("ERROR: Invalid board size.\n");
-        return 1;
-	}
+    else if(nrows < 32){
+        return sequential_game_of_life(outboard, inboard, nrows, ncols, gens_max);
+    }
 
 
 }
@@ -1307,5 +1310,6 @@ game_of_life(char *outboard,
              const int ncols,
              const int gens_max) {
 	return multi_game_of_life(outboard, inboard, nrows, ncols, gens_max);
+    //return sequential_game_of_life(outboard, inboard, nrows, ncols, gens_max);
 }
 
