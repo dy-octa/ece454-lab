@@ -135,8 +135,6 @@ typedef struct thread_args_generic{
  * gens_max: total iterations to be performed
 */
 
-char corners[2][2];
-
 #define BLOCKWIDTH 512
 #define BLOCKHEIGHT 128
 #define BOARDWIDTH 1024
@@ -645,7 +643,7 @@ void alive_cells(char board[BOARDHEIGHT * BOARDWIDTH / 8], int max_cnt) {
  * Game of Life processing thread. Only processes a particular block of the
  * entire game board.
  ****************************************************************************/
-pthread_mutex_t dbg_mutex = PTHREAD_MUTEX_INITIALIZER;
+//pthread_mutex_t dbg_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 void thread_board(char board[2][BOARDHEIGHT * BOARDWIDTH / 8],
                   pthread_mutex_t *mutex, pthread_cond_t *cond, int *done,
@@ -779,14 +777,10 @@ void thread_board_generic(char* outboard,
     test_board2 = make_board (nrowsmax, ncolsmax);
 
     for (curgen = 0; curgen < gens_max; curgen++) {
-        //printf("curgen?: %d\n", curgen);
-        for (i = srows; i < nrows; i += 32) {
-            for (j = scols; j < ncols; j += 64) {
-                //128bit rows * 512bit columns tiles
-                for (i1 = i; i1 < i + 32; i1++) {
+        for (i1 = srows; i1 < nrows; i1++) {
+            for (j1 = scols; j1 < ncols; j1++) {
                     inorth = mod(i1 - 1, nrowsmax);
                     isouth = mod(i1 + 1, nrowsmax);
-                    for (j1 = j; j1 < ((j + 64)); j1++) {
                         if (curgen < 10) {
                             jwest = mod(j1 - 1, ncolsmax);
                             jeast = mod(j1 + 1, ncolsmax);
@@ -951,8 +945,8 @@ void thread_board_generic(char* outboard,
                             }
                         }
                         BOARD(test_board2, i1, j1) = BOARD(inboard, i1, j1);
-                    }
-                }
+                    //}
+                //}
             }
         }
 
@@ -1071,6 +1065,7 @@ char *multi_game_of_life(char *outboard,
 		char *lr_changelist = ud_changelist + udsize * 2 * N_THREADS;
 
 		// Two borders array in each element
+        char corners[2][2];
 		initialize_board(inboard, packed_board, borders[0]);
 		memset(corners, 0, sizeof(corners));
 		arguments thread_args[N_THREADS];
