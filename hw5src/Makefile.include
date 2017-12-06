@@ -25,7 +25,7 @@ ifeq ($(USE_GCC),1)
 else
 	CC = icc
 	LINKER = icc
-	COPTFLAGS = -g -O3
+	COPTFLAGS = -g -O2
 endif
 
 CPPFLAGS += -D$(TIMER_TYPE) 
