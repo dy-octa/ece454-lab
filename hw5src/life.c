@@ -54,7 +54,7 @@ void output_list(short list[], int len) {
 			row = -list[i] - 1;
 			++i;
 		}
-		if (row >=231 && row <= 233)
+//		if (row >=231 && row <= 233)
 			printf("(%d, %d)%s", row, list[i], (++alter) % 8 == 0 ? "\n" : " ");
 	}
 	if (alter % 8 != 0) printf("\n");
@@ -65,7 +65,7 @@ void output_border(short list[], int len) {
 	for (i = 0; i < len; ++i) {
 		if (list[i] < 0)
 			break;
-		if ((list[i] >= 304 && list[i] <= 309))
+//		if ((list[i] >= 304 && list[i] <= 309))
 			printf("%d%s", list[i], (++alter) % 8 == 0 ? "\n" : " ");
 	}
 	if (alter % 8 != 0) printf("\n");
@@ -205,16 +205,25 @@ int board_step(const char inboard[BOARDHEIGHT * BOARDWIDTH / 8],
                short change_list[BLOCKHEIGHT * (BLOCKWIDTH + 1)], char *self_corner, int n_itr) {
 	int row = srows, col;
 	int left_i, right_i, up_i, down_i, change_cnt;
-	int newrow = 0;
+	int newrow = 0, rightmost=scols - 1, offset=1;
 //	if (n_itr == 1 && srows == BLOCKHEIGHT * 0 && scols == BLOCKWIDTH * 0)
 //		printf(" ");
 	left_i = right_i = up_i = down_i = change_cnt = 0;
-	for (int i = 0; i < active_cnt; ++i) {
-		if (active_list[i] < 0) {
+	for (int i = 0; i < active_cnt; i += (offset == 1)) {
+		if (active_list[i] < 0 && !(active_list[i] == -1 && i>0 && active_list[i-1] < 0)) {
 			newrow = 1;
 			row = -active_list[i++] - 1;
+			rightmost = scols - 1;
 		}
-		col = active_list[i];
+		if (offset == 1)
+			offset = max(-1, rightmost - active_list[i] + 1);
+		else ++offset;
+		if (active_list[i] + offset >= scols + BLOCKWIDTH) {
+			offset = 1;
+			continue;
+		}
+		rightmost = col = active_list[i] + offset;
+
 		int cnt = 0;
 		if (col == scols) {
 			cnt += TESTBORDER(ext_left, (row + BOARDHEIGHT - 1) & (BOARDHEIGHT - 1));
@@ -355,7 +364,6 @@ int row_midactive(short midactives[], int cnt, short change_list[], int change_c
 		midactives[cnt++] = scols-1;
 	c1 = change_list[i1], c2 = change_list[i2], c3 = change_list[i3];
 	for (; i1 < b1 || i2 < b2 || i3 < b3;) {
-		int c1, c2, c3;
 		col = BOARDWIDTH;
 		if (i1 < b1)
 			col = c1<col?c1:col;
@@ -568,7 +576,7 @@ int build_activelist(short midactives[], short change_list[], int change_cnt,
 
 //	check_list(midactives, cnt, srows, scols, "Mid");
 
-	cnt = generate_active_list(midactives, cnt, change_list, scols);
+//	cnt = generate_active_list(midactives, cnt, change_list, scols);
 
 //	check_list(change_list, cnt, srows, scols, "Active");
 	return cnt;
@@ -611,6 +619,7 @@ void thread_board(char board[2][BOARDHEIGHT * BOARDWIDTH / 8],
 	active_cnt = initialize_active(active_list, srows, scols);
 	for (curgen = 0; curgen < gens_max; curgen++) {
 
+//		pthread_mutex_lock(&dbg_mutex);
 		change_cnt = board_step(board[cur], board[cur ^ 1], srows, scols,
 		                        self_left[cur ^ 1], self_right[cur ^ 1], ext_left[cur], ext_right[cur],
 		                        self_left_change, self_right_change, self_up_change, self_down_change,
@@ -629,11 +638,13 @@ void thread_board(char board[2][BOARDHEIGHT * BOARDWIDTH / 8],
 //			output_border(self_down_change, BLOCKWIDTH);
 //			printf("\n");
 //		}
-//		if (srows == 256 && scols == 512) {
+//		if (srows == 0 && scols == 0) {
 //			printf("%d: Block (%d, %d) finish change\n", curgen, srows / BLOCKHEIGHT, scols / BLOCKWIDTH);
 //			output_list(change_list, change_cnt);
 //			printf("\n");
 //		}
+//		pthread_mutex_unlock(&dbg_mutex);
+
 		pthread_mutex_lock(mutex);
 		*done = *done + 1;
 		if (*done < N_THREADS) {
@@ -653,9 +664,9 @@ void thread_board(char board[2][BOARDHEIGHT * BOARDWIDTH / 8],
 		                              ext_left_change, ext_right_change, ext_up_change, ext_down_change,
 		                              ext_corner, srows, scols, curgen + 1);
 
-		short *tmp = active_list;
-		active_list = change_list;
-		change_list = tmp;
+//		short *tmp = active_list;
+//		active_list = change_list;
+//		change_list = tmp;
 //		printf("%d: Block (%d, %d) finish update\n", curgen, srows / BLOCKHEIGHT, scols / BLOCKWIDTH);
 //		if (srows <= 128)
 //			printf("Corner: %d %d %d %d\n", (*self_corner)&1, ((*self_corner)>>1)&1, ((*self_corner)>>2)&1, ((*self_corner)>>3)&1);
@@ -666,7 +677,7 @@ void thread_board(char board[2][BOARDHEIGHT * BOARDWIDTH / 8],
 //			output_list(active_list, active_cnt);
 //			printf("\n");
 //		}
-//		if (srows == 768 && scols == 0) {
+//		if (srows == 0 && scols == 0) {
 //			printf("%d: Block (%d, %d) finish update\n", curgen, srows / BLOCKHEIGHT, scols / BLOCKWIDTH);
 //			output_list(active_list, active_cnt);
 //			printf("\n");
