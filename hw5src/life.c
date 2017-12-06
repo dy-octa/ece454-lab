@@ -1293,6 +1293,7 @@ char *multi_game_of_life(char *outboard,
 	}
 	else if((nrows < 32 || ncols < 32) || (nrows > 10000 || ncols > 10000) ) {
 		printf("ERROR: Invalid board size.\n");
+        return 1;
 	}
 
 
