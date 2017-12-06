@@ -2,12 +2,17 @@
  * life.c
  * Parallelized and optimized implementation of the game of life resides here
  ****************************************************************************/
+#define _GNU_SOURCE
 #include "life.h"
 #include "util.h"
 #include "stdlib.h"
 #include "stdio.h"
+#include <unistd.h>
 #include <string.h>
 #include "pthread.h"
+#include "load.h"
+
+#include <sched.h>
 
 /*****************************************************************************
  * Helper function definitions
@@ -80,6 +85,8 @@ typedef struct thread_args {
 	int srows;
 	int scols;
 	int gens_max;
+    int max_procs;
+    int affinity;
 	char *self_left, *self_right;
 	char *ext_left, *ext_right;
 	short *self_left_change, *self_right_change, *self_up_change, *self_down_change;
@@ -87,6 +94,22 @@ typedef struct thread_args {
 	char *ext_corner[2];
 	char self_corner;
 } arguments;
+
+typedef struct thread_args_generic{
+    char* outboard;
+    char* inboard;
+    pthread_mutex_t* mutex;
+    pthread_cond_t* cond;
+    int* done;
+    int thread;
+    int srows;
+    int scols;
+    int nrows;
+    int nrowsmax;
+    int ncols;
+    int ncolsmax;
+    int gens_max;
+} arguments_generic;
 /*
  * Data structures:
  * Board: each bit stores the cell
@@ -105,6 +128,14 @@ char corners[2][2];
 #define BOARDWIDTH 1024
 #define BOARDHEIGHT 1024
 #define N_THREADS 16
+
+#define SWAP_BOARDS( b1, b2 )  do { \
+  char* temp = b1; \
+  b1 = b2; \
+  b2 = temp; \
+} while(0)
+
+#define BOARD( __board, __i, __j )  (__board[(__i) + LDA*(__j)])
 
 #define BYTEOF(b, x, y) ((char*)((b) + ((((x)<<10) + (y)) >> 3) )) // Byte of (x, y) in a 1K*1K board
 #define SETBIT(b, v, y) (((255 ^ (1<<(y))) & (b))| ((v)<<(y))) // Return b'[y] with b[y] set to v, b is a byte value
@@ -631,7 +662,7 @@ void thread_board(char board[2][BOARDHEIGHT * BOARDWIDTH / 8],
 //			output_border(self_up_change, BLOCKWIDTH);
 //			printf("\n");
 //		}
-//		if (srows == 128 && scols == 0) {
+//		if (srows == 896 && scols == 0) {
 //			printf("%d: Block (%d, %d) finish change\n", curgen, srows / BLOCKHEIGHT, scols / BLOCKWIDTH);
 //			output_list(change_list, change_cnt);
 //			printf("\nDown:\n");
@@ -670,7 +701,7 @@ void thread_board(char board[2][BOARDHEIGHT * BOARDWIDTH / 8],
 //		printf("%d: Block (%d, %d) finish update\n", curgen, srows / BLOCKHEIGHT, scols / BLOCKWIDTH);
 //		if (srows <= 128)
 //			printf("Corner: %d %d %d %d\n", (*self_corner)&1, ((*self_corner)>>1)&1, ((*self_corner)>>2)&1, ((*self_corner)>>3)&1);
-//		if (srows == 128 && scols == 0) {
+//		if ((srows == 0 && scols == 0) || (srows == 896 && scols == 0)) {
 //			printf("%d: Block (%d, %d) finish update\n", curgen, srows / BLOCKHEIGHT, scols / BLOCKWIDTH);
 //			printf("Ext Up:\n");
 //			output_border(ext_up_change, BLOCKHEIGHT);
@@ -698,11 +729,265 @@ void thread_board(char board[2][BOARDHEIGHT * BOARDWIDTH / 8],
 	}
 }
 
+void thread_board_generic(char* outboard,
+                  char* inboard,
+                  const int srows,
+                  const int scols,
+                  const int nrows,
+                  const int nrowsmax,
+                  const int ncols,
+                  const int ncolsmax,
+                  const int gens_max,
+                  pthread_mutex_t* mutex,
+                  pthread_cond_t* cond,
+                  int* done){
+    int i, j, i1, j1, curgen;
+    int LDA = nrowsmax;
+    int inorth, isouth, jwest, jeast, inorth2, isouth2, inorth3, isouth3, jwest2, jeast2;
+    int jwest3, jeast3, jwest4, jeast4;
+    char neighbor_count, neighbor_count2;
+    char neighbor_count3, neighbor_count4;
+    char neighbor_count5, neighbor_count6;
+    char neighbor_count7, neighbor_count8;
+    char neighbor_count9;
+    int test1 = 0;
+    int test2;
+    char * test_board = NULL;
+    char * test_board2 = NULL;
+    int test_array[nrows-srows][ncols-scols];
+    test_board = make_board (nrowsmax, ncolsmax);
+    test_board2 = make_board (nrowsmax, ncolsmax);
+
+    for (curgen = 0; curgen < gens_max; curgen++) {
+        //printf("curgen?: %d\n", curgen);
+        for (i = srows; i < nrows; i += 32) {
+            for (j = scols; j < ncols; j += 64) {
+                //128bit rows * 512bit columns tiles
+                for (i1 = i; i1 < i + 32; i1++) {
+                    inorth = mod(i1 - 1, nrowsmax);
+                    isouth = mod(i1 + 1, nrowsmax);
+                    for (j1 = j; j1 < ((j + 64)); j1++) {
+                        if (curgen < 10) {
+                            jwest = mod(j1 - 1, ncolsmax);
+                            jeast = mod(j1 + 1, ncolsmax);
+                            neighbor_count =
+                                    BOARD (inboard, inorth, j1) +
+                                    BOARD (inboard, isouth, j1) +
+                                    BOARD (inboard, inorth, jwest) +
+                                    BOARD (inboard, inorth, jeast) +
+                                    BOARD (inboard, i1, jwest) +
+                                    BOARD (inboard, i1, jeast) +
+                                    BOARD (inboard, isouth, jwest) +
+                                    BOARD (inboard, isouth, jeast);
+
+                            BOARD(outboard, i1, j1) = alivep(neighbor_count, BOARD (inboard, i1, j1));
+
+                        }
+                        if (curgen >= 10) {
+                            if (BOARD(test_board, i1, j1) != BOARD(inboard, i1, j1)) {
+                                inorth = mod(i1 - 1, nrowsmax);
+                                isouth = mod(i1 + 1, nrowsmax);
+                                jwest = mod(j1 - 1, ncolsmax);
+                                jeast = mod(j1 + 1, ncolsmax);
+
+
+                                neighbor_count =
+                                        BOARD (inboard, inorth, j1) +
+                                        BOARD (inboard, isouth, j1) +
+                                        BOARD (inboard, inorth, jwest) +
+                                        BOARD (inboard, inorth, jeast) +
+                                        BOARD (inboard, i1, jwest) +
+                                        BOARD (inboard, i1, jeast) +
+                                        BOARD (inboard, isouth, jwest) +
+                                        BOARD (inboard, isouth, jeast);
+
+
+                                BOARD(outboard, i1, j1) = alivep(neighbor_count, BOARD (inboard, i1, j1));
+
+
+                                //west
+
+                                jwest2 = mod((j1 - 1) - 1, ncolsmax);
+                                jeast2 = mod((j1 - 1) + 1, ncolsmax);
+                                neighbor_count2 =
+                                        BOARD (inboard, inorth, jwest) +
+                                        BOARD (inboard, isouth, jwest) +
+                                        BOARD (inboard, inorth, jwest2) +
+                                        BOARD (inboard, inorth, jeast2) +
+                                        BOARD (inboard, i1, jwest2) +
+                                        BOARD (inboard, i1, jeast2) +
+                                        BOARD (inboard, isouth, jwest2) +
+                                        BOARD (inboard, isouth, jeast2);
+
+                                BOARD(outboard, i1, jwest) = alivep(neighbor_count2, BOARD (inboard, i1, jwest));
+
+
+
+                                //east
+                                jwest3 = mod((j1 + 1) - 1, ncolsmax);
+                                jeast3 = mod((j1 + 1) + 1, ncolsmax);
+                                neighbor_count3 =
+                                        BOARD (inboard, inorth, jeast) +
+                                        BOARD (inboard, isouth, jeast) +
+                                        BOARD (inboard, inorth, jwest3) +
+                                        BOARD (inboard, inorth, jeast3) +
+                                        BOARD (inboard, i1, jwest3) +
+                                        BOARD (inboard, i1, jeast3) +
+                                        BOARD (inboard, isouth, jwest3) +
+                                        BOARD (inboard, isouth, jeast3);
+
+
+                                BOARD(outboard, i1, jeast) = alivep(neighbor_count3, BOARD (inboard, i1, jeast));
+
+                                //south
+                                inorth2 = mod((i1 + 1) - 1, nrowsmax);
+                                isouth2 = mod((i1 + 1) + 1, nrowsmax);
+                                neighbor_count4 =
+                                        BOARD (inboard, inorth2, j1) +
+                                        BOARD (inboard, isouth2, j1) +
+                                        BOARD (inboard, inorth2, jwest) +
+                                        BOARD (inboard, inorth2, jeast) +
+                                        BOARD (inboard, isouth, jwest) +
+                                        BOARD (inboard, isouth, jeast) +
+                                        BOARD (inboard, isouth2, jwest) +
+                                        BOARD (inboard, isouth2, jeast);
+
+                                BOARD(outboard, isouth, j1) = alivep(neighbor_count4, BOARD (inboard, isouth, j1));
+
+                                //north
+                                inorth3 = mod((i1 - 1) - 1, nrowsmax);
+                                isouth3 = mod((i1 - 1) + 1, nrowsmax);
+                                neighbor_count5 =
+                                        BOARD (inboard, inorth3, j1) +
+                                        BOARD (inboard, isouth3, j1) +
+                                        BOARD (inboard, inorth3, jwest) +
+                                        BOARD (inboard, inorth3, jeast) +
+                                        BOARD (inboard, inorth, jwest) +
+                                        BOARD (inboard, inorth, jeast) +
+                                        BOARD (inboard, isouth3, jwest) +
+                                        BOARD (inboard, isouth3, jeast);
+
+
+                                BOARD(outboard, inorth, j1) = alivep(neighbor_count5, BOARD (inboard, inorth, j1));
+
+                                //northwest
+                                neighbor_count6 =
+                                        BOARD (inboard, inorth3, jwest) +
+                                        BOARD (inboard, isouth3, jwest) +
+                                        BOARD (inboard, inorth3, jwest2) +
+                                        BOARD (inboard, inorth3, jeast2) +
+                                        BOARD (inboard, inorth, jwest2) +
+                                        BOARD (inboard, inorth, jeast2) +
+                                        BOARD (inboard, isouth3, jwest2) +
+                                        BOARD (inboard, isouth3, jeast2);
+
+                                BOARD(outboard, inorth, jwest) = alivep(neighbor_count6,
+                                                                        BOARD (inboard, inorth, jwest));
+
+                                //northeast x = 3 y = 18
+                                neighbor_count7 =
+                                        BOARD (inboard, inorth3, jeast) +
+                                        BOARD (inboard, isouth3, jeast) +
+                                        BOARD (inboard, inorth3, jwest3) +
+                                        BOARD (inboard, inorth3, jeast3) +
+                                        BOARD (inboard, inorth, jwest3) +
+                                        BOARD (inboard, inorth, jeast3) +
+                                        BOARD (inboard, isouth3, jwest3) +
+                                        BOARD (inboard, isouth3, jeast3);
+
+
+                                BOARD(outboard, inorth, jeast) = alivep(neighbor_count7,
+                                                                        BOARD (inboard, inorth, jeast));
+
+                                //southwest
+                                neighbor_count8 =
+                                        BOARD (inboard, inorth2, jwest) +
+                                        BOARD (inboard, isouth2, jwest) +
+                                        BOARD (inboard, inorth2, jwest2) +
+                                        BOARD (inboard, inorth2, jeast2) +
+                                        BOARD (inboard, isouth, jwest2) +
+                                        BOARD (inboard, isouth, jeast2) +
+                                        BOARD (inboard, isouth2, jwest2) +
+                                        BOARD (inboard, isouth2, jeast2);
+
+                                BOARD(outboard, isouth, jwest) = alivep(neighbor_count8,
+                                                                        BOARD (inboard, isouth, jwest));
+
+                                //southeast
+                                neighbor_count9 =
+                                        BOARD (inboard, inorth2, jeast) +
+                                        BOARD (inboard, isouth2, jeast) +
+                                        BOARD (inboard, inorth2, jwest3) +
+                                        BOARD (inboard, inorth2, jeast3) +
+                                        BOARD (inboard, isouth, jwest3) +
+                                        BOARD (inboard, isouth, jeast3) +
+                                        BOARD (inboard, isouth2, jwest3) +
+                                        BOARD (inboard, isouth2, jeast3);
+
+                                BOARD(outboard, isouth, jeast) = alivep(neighbor_count9,
+                                                                        BOARD (inboard, isouth, jeast));
+
+
+                            }
+                        }
+                        BOARD(test_board2, i1, j1) = BOARD(inboard, i1, j1);
+                    }
+                }
+            }
+        }
+
+        pthread_mutex_lock(mutex);
+        *done = *done + 1;
+        if( *done < 16 ) {
+            /* block this thread until another thread signals cond. While
+           blocked, the mutex is released, then re-aquired before this
+           thread is woken up and the call returns. */
+
+            pthread_cond_wait(cond, mutex);
+            SWAP_BOARDS(outboard, inboard);
+            SWAP_BOARDS(test_board, test_board2);
+        }
+        if( *done >= 16){
+
+            *done = 0;
+            SWAP_BOARDS(outboard, inboard);
+            SWAP_BOARDS(test_board, test_board2);
+            pthread_cond_broadcast(cond);
+        }
+
+        pthread_mutex_unlock( mutex );
+        //copy_board(test_board, test_board2, nrowsmax, ncolsmax);
+        /*for(int i = 0; i < nrows - srows; i++){
+            for(int j = 0; j < ncols - scols; j++){
+
+            }
+        }*/
+
+
+    }
+
+    return;
+}
+
+
 /*****************************************************************************
  * Thread entry function
  ****************************************************************************/
 void *thread_handler(void *v_args) {
 	arguments *threadArgs = (arguments *) v_args;
+    pthread_mutex_lock(threadArgs->mutex);
+
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(threadArgs->affinity, &cpuset);
+    pthread_t current_thread = pthread_self();
+    //int num_cores = sysconf(_SC_NPROCESSORS_ONLN);
+    //printf("Core ID: %d\n", threadArgs->affinity);
+    //if (threadArgs->affinity < 0 || threadArgs->affinity >= num_cores)
+    //    printf("PROBLEM\n");
+    pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
+
+    pthread_mutex_unlock(threadArgs->mutex);
 	thread_board(threadArgs->board, threadArgs->mutex, threadArgs->cond, threadArgs->done, threadArgs->srows,
 	             threadArgs->scols, threadArgs->gens_max,
 	             threadArgs->self_left, threadArgs->self_right, threadArgs->ext_left, threadArgs->ext_right,
@@ -713,9 +998,27 @@ void *thread_handler(void *v_args) {
 	return NULL;
 }
 
+void* thread_handler_generic(void* thread_args){
+    arguments_generic* threadArgs = (arguments_generic *) thread_args;
+    char* outboard = threadArgs->outboard;
+    char* inboard = threadArgs->inboard;
+    int nrows = threadArgs->nrows;
+    const int nrowsmax = threadArgs->nrowsmax;
+    int ncols = threadArgs->ncols;
+    const int ncolsmax = threadArgs->ncolsmax;
+    const int srows = threadArgs->srows;
+    const int scols = threadArgs->scols;
+    const int gens_max = threadArgs->gens_max;
+    pthread_mutex_t *mutex = threadArgs->mutex;
+    pthread_cond_t *cond = threadArgs->cond;
+    int* done = threadArgs->done;
+
+    thread_board_generic(outboard,inboard, srows, scols, nrows, nrowsmax, ncols, ncolsmax, gens_max, mutex, cond, done);
+    return NULL;
+}
+
 /*****************************************************************************
- * Extract a packed board to a normal char
- * -cell board
+ * Extract a packed board to a normal char-cell board
  ****************************************************************************/
 void extract_board(char board[BOARDHEIGHT][BOARDWIDTH], char packed[BOARDHEIGHT * BOARDWIDTH / 8]) {
 	int i, j;
@@ -727,7 +1030,6 @@ void extract_board(char board[BOARDHEIGHT][BOARDWIDTH], char packed[BOARDHEIGHT 
 /*****************************************************************************
  * Game of life implementation
  ****************************************************************************/
-
 char *multi_game_of_life(char *outboard,
                          char *inboard,
                          const int nrows,
@@ -735,98 +1037,257 @@ char *multi_game_of_life(char *outboard,
                          const int gens_max) {
 
 
-	int thread_done = 0;
-	pthread_mutex_t thread_mutex = PTHREAD_MUTEX_INITIALIZER;
-	pthread_cond_t thread_cond = PTHREAD_COND_INITIALIZER;
-	size_t udsize = sizeof(short) * (BLOCKWIDTH);
-	size_t lrsize = sizeof(short) * (BLOCKHEIGHT);
-	// Board: [2][nrows][ncols] bits
-	// Borders: 4 * [2][nrows] bits
-	// Changelist: N_THREADS * 2 * udsize bits
-	char *mem = aligned_alloc(64, 2 * nrows * ncols / 8 + 4 * 2 * nrows / 8 +
-	                              (udsize + lrsize) * 2 * N_THREADS);
-	char *packed_board = mem;
-	char *borders[4] = {mem + 2 * nrows * ncols / 8, mem + 2 * nrows * ncols / 8 + 2 * nrows / 8,
-	                    mem + 2 * nrows * ncols / 8 + 4 * nrows / 8, mem + 2 * nrows * ncols / 8 + 6 * nrows / 8};
+	if(nrows == 1024 && ncols == 1024){
+		int thread_done = 0;
+		int numProcs = sysconf (_SC_NPROCESSORS_ONLN);
+		//printf("number of processors: %d\n", numProcs);
+		pthread_mutex_t thread_mutex = PTHREAD_MUTEX_INITIALIZER;
+		pthread_cond_t thread_cond = PTHREAD_COND_INITIALIZER;
+		size_t udsize = sizeof(short) * (BLOCKWIDTH);
+		size_t lrsize = sizeof(short) * (BLOCKHEIGHT);
+		// Board: [2][nrows][ncols] bits
+		// Borders: 4 * [2][nrows] bits
+		// Changelist: N_THREADS * 2 * udsize bits
+		char *mem = aligned_alloc(64, 2 * nrows * ncols / 8 + 4 * 2 * nrows/ 8 +
+		                              (udsize + lrsize) * 2 * N_THREADS);
+		char *packed_board = mem;
+		char *borders[4] = {mem + 2 * nrows * ncols / 8, mem + 2 * nrows * ncols / 8 + 2 * nrows / 8,
+		                    mem + 2 * nrows * ncols / 8 + 4 * nrows / 8, mem + 2 * nrows * ncols / 8 + 6 * nrows / 8};
 
-	char *ud_changelist = mem + 2 * nrows * ncols / 8 + 4 * 2 * nrows / 8;
-	char *lr_changelist = ud_changelist + udsize * 2 * N_THREADS;
+		char *ud_changelist = mem + 2 * nrows * ncols / 8 + 4 * 2 * nrows/ 8;
+		char *lr_changelist = ud_changelist + udsize * 2 * N_THREADS;
 
-	// Two borders array in each element
-	initialize_board(inboard, packed_board, borders[0]);
-	memset(corners, 0, sizeof(corners));
-	arguments thread_args[N_THREADS];
-	memset(thread_args, 0, sizeof(thread_args));
-	for (int i = 0; i < N_THREADS; i++) {
-		thread_args[i].board = packed_board;
-		thread_args[i].mutex = &thread_mutex;
-		thread_args[i].cond = &thread_cond;
-		thread_args[i].done = &thread_done;
-		thread_args[i].thread = i;
-		thread_args[i].gens_max = gens_max;
+		// Two borders array in each element
+		initialize_board(inboard, packed_board, borders[0]);
+		memset(corners, 0, sizeof(corners));
+		arguments thread_args[N_THREADS];
+		memset(thread_args, 0, sizeof(thread_args));
+		int affinity_count = 0;
+		for (int i = 0; i < N_THREADS; i++) {
+			thread_args[i].board = packed_board;
+			thread_args[i].mutex = &thread_mutex;
+			thread_args[i].cond = &thread_cond;
+			thread_args[i].done = &thread_done;
+			thread_args[i].thread = i;
+			thread_args[i].gens_max = gens_max;
+			thread_args[i].max_procs = numProcs;
+			if(affinity_count == numProcs)
+				affinity_count = 0;
+			thread_args[i].affinity = affinity_count;
+			affinity_count++;
 
-		if (i & 1) {
-			thread_args[i].self_left = borders[2];
-			thread_args[i].self_right = borders[3];
-			thread_args[i].ext_left = borders[1];
-			thread_args[i].ext_right = borders[0];
-		} else {
-			thread_args[i].self_left = borders[0];
-			thread_args[i].self_right = borders[1];
-			thread_args[i].ext_left = borders[3];
-			thread_args[i].ext_right = borders[2];
+			if (i & 1) {
+				thread_args[i].self_left = borders[2];
+				thread_args[i].self_right = borders[3];
+				thread_args[i].ext_left = borders[1];
+				thread_args[i].ext_right = borders[0];
+			} else {
+				thread_args[i].self_left = borders[0];
+				thread_args[i].self_right = borders[1];
+				thread_args[i].ext_left = borders[3];
+				thread_args[i].ext_right = borders[2];
+			}
+			thread_args[i].srows = (nrows / 8) * (i / 2);
+			thread_args[i].scols = (i & 1) * (ncols / 2);
+
+			int down_index = ((i & 1 ? N_THREADS : 0) + (i / 2) * 2);
+			int up_index = i < 2 ? down_index + 15: down_index - 1;
+			thread_args[i].self_up_change = ud_changelist + up_index * udsize;
+			thread_args[i].self_down_change = ud_changelist + down_index * udsize;
+
+			int left_index, right_index;
+			if (i & 1) {
+				left_index = 1 + (i / 2) * 4;
+				right_index = left_index + 1;
+			} else {
+				left_index = 3 + (i / 2) * 4;
+				right_index = left_index - 3;
+			}
+			thread_args[i].self_left_change = lr_changelist + left_index * lrsize;
+			thread_args[i].self_right_change = lr_changelist + right_index * lrsize;
 		}
-		thread_args[i].srows = (nrows / 8) * (i / 2);
-		thread_args[i].scols = (i & 1) * (ncols / 2);
 
-		int down_index = ((i & 1 ? N_THREADS : 0) + (i / 2) * 2);
-		int up_index = i < 2 ? down_index + 15 : down_index - 1;
-		thread_args[i].self_up_change = ud_changelist + up_index * udsize;
-		thread_args[i].self_down_change = ud_changelist + down_index * udsize;
-
-		int left_index, right_index;
-		if (i & 1) {
-			left_index = 1 + (i / 2) * 4;
-			right_index = left_index + 1;
-		} else {
-			left_index = 3 + (i / 2) * 4;
-			right_index = left_index - 3;
+		for (int i = 0; i < N_THREADS; ++i) {
+			if (i < 2)
+				thread_args[i].ext_up_change = thread_args[i + 14].self_down_change;
+			else thread_args[i].ext_up_change = thread_args[i - 2].self_down_change;
+			if (i >= 14)
+				thread_args[i].ext_down_change = thread_args[i - 14].self_up_change;
+			else thread_args[i].ext_down_change = thread_args[i + 2].self_up_change;
+			if (i & 1) {
+				thread_args[i].ext_left_change = thread_args[i - 1].self_right_change;
+				thread_args[i].ext_right_change = thread_args[i - 1].self_left_change;
+			} else {
+				thread_args[i].ext_left_change = thread_args[i + 1].self_right_change;
+				thread_args[i].ext_right_change = thread_args[i + 1].self_left_change;
+			}
+			if (i & 1) {
+				thread_args[i].ext_corner[0] = &thread_args[(i - 3 + N_THREADS) & 15].self_corner;
+				thread_args[i].ext_corner[1] = &thread_args[(i + 1) & 15].self_corner;
+			} else {
+				thread_args[i].ext_corner[0] = &thread_args[(i - 1 + N_THREADS) & 15].self_corner;
+				thread_args[i].ext_corner[1] = &thread_args[(i + 3) & 15].self_corner;
+			}
 		}
-		thread_args[i].self_left_change = lr_changelist + left_index * lrsize;
-		thread_args[i].self_right_change = lr_changelist + right_index * lrsize;
+		pthread_t test_thread[N_THREADS];
+		for (int i = 0; i < N_THREADS; i++) {
+			pthread_create(&test_thread[i], NULL, thread_handler, &thread_args[i]);
+		}
+		for (int j = 0; j < N_THREADS; j++) {
+			pthread_join(test_thread[j], NULL);
+		}
+		extract_board(outboard, packed_board + (gens_max & 1 ? nrows * ncols / 8 : 0));
+		return outboard;
+	}
+	else if((nrows >= 32 && ncols >= 32) && (nrows <=10000 && ncols <= 10000) ){
+		int thread_done = 0;
+		pthread_mutex_t thread_mutex = PTHREAD_MUTEX_INITIALIZER;
+		pthread_cond_t thread_cond = PTHREAD_COND_INITIALIZER;
+
+
+
+		arguments_generic thread_args_generic[16];
+		for(int i = 0; i < 16; i++){
+			thread_args_generic[i].outboard = outboard;
+			thread_args_generic[i].inboard = inboard;
+			thread_args_generic[i].mutex = &thread_mutex;
+			thread_args_generic[i].cond = &thread_cond;
+			thread_args_generic[i].done = &thread_done;
+			thread_args_generic[i].nrows = nrows;
+			thread_args_generic[i].ncols = ncols;
+			thread_args_generic[i].nrowsmax = nrows;
+			thread_args_generic[i].ncolsmax = ncols;
+			thread_args_generic[i].scols = 0;
+			thread_args_generic[i].srows = 0;
+			thread_args_generic[i].thread = i;
+			thread_args_generic[i].gens_max = gens_max;
+
+			switch (i){
+				case 0:
+					thread_args_generic[i].srows = 0;
+					thread_args_generic[i].scols = 0;
+					thread_args_generic[i].nrows = nrows/4;
+					thread_args_generic[i].ncols = ncols/4;
+					break;
+				case 1:
+					thread_args_generic[i].srows = 0;
+					thread_args_generic[i].scols = ncols/4;
+					thread_args_generic[i].nrows = nrows/4;
+					thread_args_generic[i].ncols = ncols/2;
+					break;
+				case 2:
+					thread_args_generic[i].srows = 0;
+					thread_args_generic[i].scols = ncols/2;
+					thread_args_generic[i].nrows = nrows/4;
+					thread_args_generic[i].ncols = (3*ncols)/4;
+					break;
+				case 3:
+					thread_args_generic[i].srows = 0;
+					thread_args_generic[i].scols = (3*ncols)/4;
+					thread_args_generic[i].nrows = nrows/4;
+					thread_args_generic[i].ncols = ncols;
+					break;
+				case 4:
+					thread_args_generic[i].srows = nrows/4;
+					thread_args_generic[i].scols = 0;
+					thread_args_generic[i].nrows = nrows/2;
+					thread_args_generic[i].ncols = ncols/4;
+					break;
+				case 5:
+					thread_args_generic[i].srows = nrows/4;
+					thread_args_generic[i].scols = ncols/4;
+					thread_args_generic[i].nrows = nrows/2;
+					thread_args_generic[i].ncols = ncols/2;
+					break;
+				case 6:
+					thread_args_generic[i].srows = nrows/4;
+					thread_args_generic[i].scols = ncols/2;
+					thread_args_generic[i].nrows = nrows/2;
+					thread_args_generic[i].ncols = (3*ncols)/4;
+					break;
+				case 7:
+					thread_args_generic[i].srows = nrows/4;
+					thread_args_generic[i].scols = (3*ncols)/4;
+					thread_args_generic[i].nrows = nrows/2;
+					thread_args_generic[i].ncols = ncols;
+					break;
+				case 8:
+					thread_args_generic[i].srows = nrows/2;
+					thread_args_generic[i].scols = 0;
+					thread_args_generic[i].nrows = (3*nrows)/4;
+					thread_args_generic[i].ncols = ncols/4;
+					break;
+				case 9:
+					thread_args_generic[i].srows = nrows/2;
+					thread_args_generic[i].scols = ncols/4;
+					thread_args_generic[i].nrows = (3*nrows)/4;
+					thread_args_generic[i].ncols = ncols/2;
+					break;
+				case 10:
+					thread_args_generic[i].srows = nrows/2;
+					thread_args_generic[i].scols = ncols/2;
+					thread_args_generic[i].nrows = (3*nrows)/4;
+					thread_args_generic[i].ncols = (3*ncols)/4;
+					break;
+				case 11:
+					thread_args_generic[i].srows = nrows/2;
+					thread_args_generic[i].scols = (3*ncols)/4;
+					thread_args_generic[i].nrows = (3*nrows)/4;
+					thread_args_generic[i].ncols = ncols;
+					break;
+				case 12:
+					thread_args_generic[i].srows = (3*nrows)/4;
+					thread_args_generic[i].scols = 0;
+					thread_args_generic[i].nrows = nrows;
+					thread_args_generic[i].ncols = ncols/4;
+					break;
+				case 13:
+					thread_args_generic[i].srows = (3*nrows)/4;
+					thread_args_generic[i].scols = ncols/4;
+					thread_args_generic[i].nrows = nrows;
+					thread_args_generic[i].ncols = ncols/2;
+					break;
+				case 14:
+					thread_args_generic[i].srows = (3*nrows)/4;
+					thread_args_generic[i].scols = ncols/2;
+					thread_args_generic[i].nrows = nrows;
+					thread_args_generic[i].ncols = (3*ncols)/4;
+					break;
+				case 15:
+					thread_args_generic[i].srows = (3*nrows)/4;
+					thread_args_generic[i].scols = (3*ncols)/4;
+					thread_args_generic[i].nrows = nrows;
+					thread_args_generic[i].ncols = ncols;
+					break;
+				default:
+					break;
+			}
+		}
+
+		pthread_t test_thread_generic[16];
+
+		for(int i = 0; i < 16; i++){
+			pthread_create(&test_thread_generic[i], NULL, thread_handler_generic, &thread_args_generic[i]);
+		}
+		for(int j = 0; j < 16; j++){
+			pthread_join(test_thread_generic[j], NULL);
+		}
+
+		//}
+		/*
+		 * We return the output board, so that we know which one contains
+		 * the final result (because we've been swapping boards around).
+		 * Just be careful when you free() the two boards, so that you don't
+		 * free the same one twice!!!
+		 */
+
+		return inboard;
+	}
+	else if((nrows < 32 || ncols < 32) || (nrows > 10000 || ncols > 10000) ) {
+		printf("ERROR: Invalid board size.\n");
 	}
 
-	for (int i = 0; i < N_THREADS; ++i) {
-		if (i < 2)
-			thread_args[i].ext_up_change = thread_args[i + 14].self_down_change;
-		else thread_args[i].ext_up_change = thread_args[i - 2].self_down_change;
-		if (i >= 14)
-			thread_args[i].ext_down_change = thread_args[i - 14].self_up_change;
-		else thread_args[i].ext_down_change = thread_args[i + 2].self_up_change;
-		if (i & 1) {
-			thread_args[i].ext_left_change = thread_args[i - 1].self_right_change;
-			thread_args[i].ext_right_change = thread_args[i - 1].self_left_change;
-		} else {
-			thread_args[i].ext_left_change = thread_args[i + 1].self_right_change;
-			thread_args[i].ext_right_change = thread_args[i + 1].self_left_change;
-		}
-		if (i & 1) {
-			thread_args[i].ext_corner[0] = &thread_args[(i - 3 + N_THREADS) & 15].self_corner;
-			thread_args[i].ext_corner[1] = &thread_args[(i + 1) & 15].self_corner;
-		} else {
-			thread_args[i].ext_corner[0] = &thread_args[(i - 1 + N_THREADS) & 15].self_corner;
-			thread_args[i].ext_corner[1] = &thread_args[(i + 3) & 15].self_corner;
-		}
-	}
-	pthread_t test_thread[N_THREADS];
-	for (int i = 0; i < N_THREADS; i++) {
-		pthread_create(&test_thread[i], NULL, thread_handler, &thread_args[i]);
-	}
-	for (int j = 0; j < N_THREADS; j++) {
-		pthread_join(test_thread[j], NULL);
-	}
-	extract_board(outboard, packed_board + (gens_max & 1 ? nrows * ncols / 8 : 0));
-	return outboard;
+
 }
 
 
