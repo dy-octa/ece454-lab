@@ -11,7 +11,6 @@
 #include <string.h>
 #include "pthread.h"
 #include "load.h"
-
 #include <sched.h>
 
 /*****************************************************************************
@@ -87,6 +86,17 @@ typedef struct thread_args {
 	char *ext_corner[2];
 	char self_corner;
 } arguments;
+/*
+ * Data structures:
+ * Board: each bit stores the cell
+ * Border: each bit stores the cell
+ * Active list: each element stores the col, record of a row starts with negative elements -row-1
+ * Change list: each element stores the col, record of a row starts with negative elements -row-1
+ * (There should be no empty row record)
+ * Border Change list: terminated by -1 or the maximum number of elements (BLOCKWIDTH or BLOCKHEIGHT) when no -1 presents
+ * Unordered in each row, but group of rows are in ascending order
+ * Hence left & right border change lists are in ascending order
+*/
 
 typedef struct thread_args_generic{
     char* outboard;
@@ -103,19 +113,22 @@ typedef struct thread_args_generic{
     int ncolsmax;
     int gens_max;
 } arguments_generic;
+
 /*
  * Data structures:
- * Board: each bit stores the cell
- * Border: each bit stores the cell
- * Active list: each element stores the col, record of a row starts with negative elements -row-1
- * Change list: each element stores the col, record of a row starts with negative elements -row-1
- * (There should be no empty row record)
- * Border Change list: terminated by -1 or the maximum number of elements (BLOCKWIDTH or BLOCKHEIGHT) when no -1 presents
- * Unordered in each row, but group of rows are in ascending order
- * Hence left & right border change lists are in ascending order
+ * Outboard: Original passed in outboard
+ * Inboard: original passed in inboard
+ * Thread: Numbered thread, 0-15.
+ * srows: start row for the particular thread
+ * scols: start column for the particular thread
+ * nrows: end row for the particular thread
+ * nrowsmax: total number of rows in board
+ * ncols: end column for the particular thread
+ * ncolsmax: total number of columns in board
+ * gens_max: total iterations to be performed
 */
 
-char corners[2][2];
+
 
 #define BLOCKWIDTH 512
 #define BLOCKHEIGHT 128
@@ -635,6 +648,12 @@ void thread_board(char board[2][BOARDHEIGHT * BOARDWIDTH / 8],
 	}
 }
 
+/*****************************************************************************
+ * Game of Life processing thread. Only processes a particular block of the
+ * entire game board. This is the generic process thread that processes non
+ * 1024x1024 boards
+ ****************************************************************************/
+
 void thread_board_generic(char* outboard,
                   char* inboard,
                   const int srows,
@@ -665,14 +684,10 @@ void thread_board_generic(char* outboard,
     test_board2 = make_board (nrowsmax, ncolsmax);
 
     for (curgen = 0; curgen < gens_max; curgen++) {
-        //printf("curgen?: %d\n", curgen);
-        for (i = srows; i < nrows; i += 32) {
-            for (j = scols; j < ncols; j += 64) {
-                //128bit rows * 512bit columns tiles
-                for (i1 = i; i1 < i + 32; i1++) {
+        for (i1 = srows; i1 < nrows; i1++) {
+            for (j1 = scols; j1 < ncols; j1++) {
                     inorth = mod(i1 - 1, nrowsmax);
                     isouth = mod(i1 + 1, nrowsmax);
-                    for (j1 = j; j1 < ((j + 64)); j1++) {
                         if (curgen < 10) {
                             jwest = mod(j1 - 1, ncolsmax);
                             jeast = mod(j1 + 1, ncolsmax);
@@ -837,8 +852,6 @@ void thread_board_generic(char* outboard,
                             }
                         }
                         BOARD(test_board2, i1, j1) = BOARD(inboard, i1, j1);
-                    }
-                }
             }
         }
 
@@ -862,14 +875,6 @@ void thread_board_generic(char* outboard,
         }
 
         pthread_mutex_unlock( mutex );
-        //copy_board(test_board, test_board2, nrowsmax, ncolsmax);
-        /*for(int i = 0; i < nrows - srows; i++){
-            for(int j = 0; j < ncols - scols; j++){
-
-            }
-        }*/
-
-
     }
 
     return;
@@ -887,10 +892,6 @@ void *thread_handler(void *v_args) {
     CPU_ZERO(&cpuset);
     CPU_SET(threadArgs->affinity, &cpuset);
     pthread_t current_thread = pthread_self();
-    //int num_cores = sysconf(_SC_NPROCESSORS_ONLN);
-    //printf("Core ID: %d\n", threadArgs->affinity);
-    //if (threadArgs->affinity < 0 || threadArgs->affinity >= num_cores)
-    //    printf("PROBLEM\n");
     pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
 
     pthread_mutex_unlock(threadArgs->mutex);
@@ -903,7 +904,9 @@ void *thread_handler(void *v_args) {
 	             threadArgs->ext_down_change, threadArgs->ext_corner, &threadArgs->self_corner);
 	return NULL;
 }
-
+/*****************************************************************************
+ * Thread entry function for non 1024x1024 board
+ ****************************************************************************/
 void* thread_handler_generic(void* thread_args){
     arguments_generic* threadArgs = (arguments_generic *) thread_args;
     char* outboard = threadArgs->outboard;
@@ -965,6 +968,7 @@ char *multi_game_of_life(char *outboard,
         char *lr_changelist = ud_changelist + udsize * 2 * N_THREADS;
 
         // Two borders array in each element
+        char corners[2][2];
         initialize_board(inboard, packed_board, borders[0]);
         memset(corners, 0, sizeof(corners));
         arguments thread_args[N_THREADS];
@@ -1180,7 +1184,7 @@ char *multi_game_of_life(char *outboard,
             pthread_join(test_thread_generic[j], NULL);
         }
 
-        //}
+
         /*
          * We return the output board, so that we know which one contains
          * the final result (because we've been swapping boards around).

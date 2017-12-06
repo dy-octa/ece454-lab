@@ -21,7 +21,7 @@ USE_GCC=1
 ifeq ($(USE_GCC),1)
 	CC = gcc
 	LINKER = gcc
-	COPTFLAGS = -Wall -g -std=c11 -pthread
+	COPTFLAGS = -Wall -g -O2 -std=c11 -pthread
 else
 	CC = icc
 	LINKER = icc
