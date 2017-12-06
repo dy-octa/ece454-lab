@@ -1292,8 +1292,10 @@ char *multi_game_of_life(char *outboard,
 		 * Just be careful when you free() the two boards, so that you don't
 		 * free the same one twice!!!
 		 */
-
-		return inboard;
+        if(gens_max%2 == 0)
+		    return inboard;
+        else
+            return outboard;
 	}
     else if(nrows < 32){
         return sequential_game_of_life(outboard, inboard, nrows, ncols, gens_max);
