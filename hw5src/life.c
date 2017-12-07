@@ -945,8 +945,6 @@ void thread_board_generic(char* outboard,
                             }
                         }
                         BOARD(test_board2, i1, j1) = BOARD(inboard, i1, j1);
-                    //}
-                //}
             }
         }
 
@@ -1284,7 +1282,7 @@ char *multi_game_of_life(char *outboard,
 		for(int j = 0; j < 16; j++){
 			pthread_join(test_thread_generic[j], NULL);
 		}
-        
+
         if(gens_max%2 == 0)
 		    return inboard;
         else
