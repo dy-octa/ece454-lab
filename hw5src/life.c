@@ -135,8 +135,6 @@ typedef struct thread_args_generic{
  * gens_max: total iterations to be performed
 */
 
-char corners[2][2];
-
 #define BLOCKWIDTH 512
 #define BLOCKHEIGHT 128
 #define BOARDWIDTH 1024
@@ -788,14 +786,10 @@ void thread_board_generic(char* outboard,
     test_board2 = make_board (nrowsmax, ncolsmax);
 
     for (curgen = 0; curgen < gens_max; curgen++) {
-        //printf("curgen?: %d\n", curgen);
-        for (i = srows; i < nrows; i += 32) {
-            for (j = scols; j < ncols; j += 64) {
-                //128bit rows * 512bit columns tiles
-                for (i1 = i; i1 < i + 32; i1++) {
+        for (i1 = srows; i1 < nrows; i1++) {
+            for (j1 = scols; j1 < ncols; j1++) {
                     inorth = mod(i1 - 1, nrowsmax);
                     isouth = mod(i1 + 1, nrowsmax);
-                    for (j1 = j; j1 < ((j + 64)); j1++) {
                         if (curgen < 10) {
                             jwest = mod(j1 - 1, ncolsmax);
                             jeast = mod(j1 + 1, ncolsmax);
@@ -960,8 +954,6 @@ void thread_board_generic(char* outboard,
                             }
                         }
                         BOARD(test_board2, i1, j1) = BOARD(inboard, i1, j1);
-                    }
-                }
             }
         }
 
@@ -1059,7 +1051,11 @@ char *multi_game_of_life(char *outboard,
                          const int gens_max) {
 
 
-	if(nrows == 1024 && ncols == 1024){
+    if((nrows > 10000 || ncols > 10000) ) {
+        printf("ERROR: Invalid board size.\n");
+        exit(1);
+    }
+    else if(nrows == 1024 && ncols == 1024){
 		int thread_done = 0;
 		int numProcs = sysconf (_SC_NPROCESSORS_ONLN);
 		//printf("number of processors: %d\n", numProcs);
@@ -1080,6 +1076,7 @@ char *multi_game_of_life(char *outboard,
 		char *lr_changelist = ud_changelist + udsize * 2 * N_THREADS;
 
 		// Two borders array in each element
+        char corners[2][2];
 		initialize_board(inboard, packed_board, borders[0]);
 		memset(corners, 0, sizeof(corners));
 		arguments thread_args[N_THREADS];
@@ -1295,19 +1292,14 @@ char *multi_game_of_life(char *outboard,
 			pthread_join(test_thread_generic[j], NULL);
 		}
 
-		//}
-		/*
-		 * We return the output board, so that we know which one contains
-		 * the final result (because we've been swapping boards around).
-		 * Just be careful when you free() the two boards, so that you don't
-		 * free the same one twice!!!
-		 */
-
-		return inboard;
+        if(gens_max%2 == 0)
+		    return inboard;
+        else
+            return outboard;
 	}
-	else if((nrows < 32 || ncols < 32) || (nrows > 10000 || ncols > 10000) ) {
-		printf("ERROR: Invalid board size.\n");
-	}
+    else if(nrows < 32){
+        return sequential_game_of_life(outboard, inboard, nrows, ncols, gens_max);
+    }
 
 
 }
@@ -1320,5 +1312,6 @@ game_of_life(char *outboard,
              const int ncols,
              const int gens_max) {
 	return multi_game_of_life(outboard, inboard, nrows, ncols, gens_max);
+    //return sequential_game_of_life(outboard, inboard, nrows, ncols, gens_max);
 }
 
