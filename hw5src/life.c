@@ -1284,14 +1284,7 @@ char *multi_game_of_life(char *outboard,
 		for(int j = 0; j < 16; j++){
 			pthread_join(test_thread_generic[j], NULL);
 		}
-
-		//}
-		/*
-		 * We return the output board, so that we know which one contains
-		 * the final result (because we've been swapping boards around).
-		 * Just be careful when you free() the two boards, so that you don't
-		 * free the same one twice!!!
-		 */
+        
         if(gens_max%2 == 0)
 		    return inboard;
         else
