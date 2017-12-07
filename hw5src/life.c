@@ -154,11 +154,13 @@ char corners[2][2];
 #define BYTEOF(b, x, y) ((char*)((b) + ((((x)<<10) + (y)) >> 3) )) // Byte of (x, y) in a 1K*1K board
 #define SETBIT(b, v, y) (((255 ^ (1<<(y))) & (b))| ((v)<<(y))) // Return b'[y] with b[y] set to v, b is a byte value
 #define SETCELL(b, x, y, v) (*BYTEOF(b, x, y) = SETBIT(*BYTEOF(b, x, y), v, (y)&7)) // Set cell (x, y) in 1K*1K board to v
+#define FLIPCELL(b, x, y) (*BYTEOF(b, x, y) ^= (1<<((y)&7))) // Flip cell (x, y) in 1K*1K board
 #define TESTCELL(b, x, y) (((*BYTEOF(b, x, y)) >> ((y)&7))&1) // Test cell (x, y) in 1K*1K board
 
 #define BORDERBYTEOF(b, y) ((char*)((b) + ((y)>>3))) // Byte of y in a 1K border
 #define SETBORDER(b, y, v) ((*BORDERBYTEOF(b, y)) = SETBIT(*BORDERBYTEOF(b, y), v, (y)&7)) // Set cell y in 1K border to v
 #define TESTBORDER(b, y) (((*BORDERBYTEOF(b, y)) >> ((y)&7))&1) // Test y in 1K border
+#define FLIPBORDER(b, y) (*BORDERBYTEOF(b, y) ^= (1<<((y)&7))) // Flip b[y]
 #define max(a, b) (a>b?a:b)
 #define min(a, b) (a<b?a:b)
 
@@ -248,16 +250,24 @@ int board_step(const char inboard[BOARDHEIGHT * BOARDWIDTH / 8],
                short up_change[BLOCKWIDTH], short down_change[BLOCKWIDTH],
                const short active_list[BLOCKHEIGHT * (BLOCKWIDTH + 1)], int active_cnt,
                short change_list[BLOCKHEIGHT * (BLOCKWIDTH + 1)], char *self_corner, int n_itr) {
-	int row = srows, col;
-	int left_i, right_i, up_i, down_i, change_cnt;
-	int newrow = 0, rightmost=scols - 1, offset=1;
+	int row, col;
+	int i, left_i, right_i, up_i, down_i, change_cnt;
+	int newrow = 0, rightmost = scols - 1, offset=1;
 //	if (n_itr == 1 && srows == BLOCKHEIGHT * 0 && scols == BLOCKWIDTH * 0)
 //		printf(" ");
 	left_i = right_i = up_i = down_i = change_cnt = 0;
-	for (int i = 0; i < active_cnt; i += (offset == 1)) {
-		if (active_list[i] < 0 && !(active_list[i] == -1 && i>0 && active_list[i-1] < 0)) {
-			newrow = 1;
+	if (active_cnt > 0) {
+		row = -active_list[0] - 1;
+		newrow = 1;
+		change_list[change_cnt++] = -row - 1;
+	}
+	for (i = 1; i < active_cnt; i += (offset == 1)) {
+		if (active_list[i] < -1) {
+			if (newrow)
+				--change_cnt;
 			row = -active_list[i++] - 1;
+			change_list[change_cnt++] = -row - 1;
+			newrow = 1;
 			rightmost = scols - 1;
 		}
 		if (offset == 1)
@@ -297,27 +307,24 @@ int board_step(const char inboard[BOARDHEIGHT * BOARDWIDTH / 8],
 		int val = TESTCELL(inboard, row, col);
 		if (val) {
 			if (cnt < 2 || cnt > 3)
-				SETCELL(outboard, row, col, 0);
+				FLIPCELL(outboard, row, col);
 			else continue;
 		} else {
 			if (cnt == 3)
-				SETCELL(outboard, row, col, 1);
+				FLIPCELL(outboard, row, col);
 			else continue;
 		}
-		if (newrow) {
-			change_list[change_cnt++] = -row - 1;
-			newrow = 0;
-		}
 		change_list[change_cnt++] = col;
+		newrow = 0;
 		if (col == scols) {
-			SETBORDER(self_left, row, !val);
+			FLIPBORDER(self_left, row);
 			left_change[left_i++] = row;
 			if (row == srows)
 				*self_corner |= SETBIT(*self_corner, !val, 0);
 			else if (row == srows + BLOCKHEIGHT - 1)
 				*self_corner |= SETBIT(*self_corner, !val, 2);
 		} else if (col == scols + BLOCKWIDTH - 1) {
-			SETBORDER(self_right, row, !val);
+			FLIPBORDER(self_right, row);
 			right_change[right_i++] = row;
 			if (row == srows)
 				*self_corner |= SETBIT(*self_corner, !val, 1);
@@ -329,6 +336,8 @@ int board_step(const char inboard[BOARDHEIGHT * BOARDWIDTH / 8],
 		else if (row == srows + BLOCKHEIGHT - 1)
 			down_change[down_i++] = col;
 	}
+	if (newrow && i != 1)
+		--change_cnt;
 	if (left_i < BLOCKHEIGHT)
 		left_change[left_i] = -1;
 	if (right_i < BLOCKHEIGHT)
@@ -645,7 +654,7 @@ void alive_cells(char board[BOARDHEIGHT * BOARDWIDTH / 8], int max_cnt) {
  * Game of Life processing thread. Only processes a particular block of the
  * entire game board.
  ****************************************************************************/
-pthread_mutex_t dbg_mutex = PTHREAD_MUTEX_INITIALIZER;
+//pthread_mutex_t dbg_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 void thread_board(char board[2][BOARDHEIGHT * BOARDWIDTH / 8],
                   pthread_mutex_t *mutex, pthread_cond_t *cond, int *done,
