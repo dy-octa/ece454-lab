@@ -11,5 +11,24 @@ Multi-Threading:
 Since the test server has 8 hyperthreaded cores we wanted to make full use of them by implementing a 16 thread implementation of GoL. We break up the board into 16 equally sized pieces and assign each of these miniboards to one of the threads for processing. Since each iteration of the GoL algorithm requires the results of the previous iteration to proceed we couldn't just let the threads run unsynchronized as this would produce skewed results. To synchronize the threads we used a type of barrier that would wait for all threads to complete processing a single iteration before allowing them to continue on to the next.
 
 Optimizations:
- 
+
+1. Algorithm optimization
+We use a change list to reduce the computation in each iteration.
 For optimization of the 1k test case we obviously needed to reduce the number of iterations the processing for loop performs. As GoL iterates, fewer and fewer cells become active and in fact remain in a static state for the rest of the iterations. We wanted to make of this use and instead of iterating over the entire board in a for loop every iteration, we wanted to only iterate over currently active cells and their neighbours every iteration. The number of active cells becoming smaller and smaller as the game progresses would therefore reduce our processing time if we only analyzed the active cells. To achieve this we would track changes in cells by comparing their current board value with their previous board value. If they had changed that meant they were active and would be placed in an active list, as well if that cell is active it is possible its change affected neighbours, so neighbour values would be calculated and if they had changed, they would also be added to the actives list. After an initial pass and building of the active list, our processing would now only iterate over the actives list for the remainder of the game, with the list progressively getting smaller as nodes that haven't changed would be pushed off.
+
+To build the active list for next iteration based on the change list of current iteration, we use a strategy of 3-way merging (which is similar to the 2-way merging in merge sort). The idea is that each cell can be activated by changed cell from a higher row, the row of the cell, or the lower row. The change list is designed to be in ascending order (sorted according to row and column), so we can recognize the the interval of each of the 3 rows, the cells on the rows ordered by column. Therefore we can merge them linearly and produce a list without duplicates.
+
+In our implementation the active list is not directly generated. Instead, we create an intermediate "midactives": each changed cell (r, c) will turn (r-1, c), (r,c) and (r+1, c) "midactive". Since the "midactives" are stored in order, the active cells can be easily decided in the part in the next iteration of modifying the boards and producing the new change list.
+
+Change lists and active lists are private to each block to avoid cache -coherence problem. However cells on the border can be affected by cells in another block. Therefore each block has 4 border change lists, which it writes to, and 4 external border change lists of its neighbors, which it reads from.
+
+2. Memory optimization
+
+We denote each cell as a bit and pack the whole board into a 1K * 1K / 8 char array, and use bit operations to extract the exact state of a cell.
+The 1K * 1K board is divided to 16 blocks, each sized 128*512, so each row can be fit in one cache line. We use aligned alloc function to ensure that the array is aligned to 64B.
+To further reduce the cache miss on the left and right border of each block, we use a border buffer to cache the column 0, 511, 512 and 1023 in row-order. Also we create corner buffers to store the 4 corners of each block. So that cache miss rate is minimized.
+
+3. Multi-threading optimization
+
+With the memory optimization above, false sharing is already avoided. Furthermore, we use a strategy to minimize cache-coherence problem:
+Each iteration is divided to 2 phases. In phase 1, each thread read from a side of the double-buffered board and write to the another side of the board. Also the thread updates each own change list, double-buffered border buffer, border change list and corner buffer. In phase 2, each thread reads from its own change list and neighbor blocks border change list and corner buffer. In this way, reading and updating are separated and CPUs will never race on ownership of shared cache lines.
